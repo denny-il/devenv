@@ -15,17 +15,77 @@ Linux and macOS, Node 22.18 or newer, Docker Compose 2.24.4 or newer.
 pnpm add -D github:denny-il/devenv
 ```
 
-pnpm resolves GitHub repositories over HTTPS. While this one is private, let
-Git reach GitHub over SSH instead, once per machine:
-
-```sh
-git config --global url."git@github.com:".insteadOf "https://github.com/"
-```
-
 ```jsonc
 // package.json
 { "scripts": { "local": "devenv" } }
 ```
+
+### While the repository is private
+
+On a machine that is not prepared, the install fails like this:
+
+```
+Failed to resolve git dependency "github:denny-il/devenv": git ls-remote failed:
+fatal: could not read Username for 'https://github.com': terminal prompts disabled
+```
+
+pnpm takes a GitHub specifier as the repository's identity, not as a choice of
+transport. `github:`, `https://` and `git+ssh://` forms all resolve through
+`https://github.com/…`, which is also what the lockfile records, so no
+SSH-looking specifier helps. The transport is the machine's
+[Git configuration](https://pnpm.io/package-sources#how-git-dependencies-are-resolved).
+
+A machine needs two things, once:
+
+1. An SSH key with access to the repository. `ssh -T git@github.com` checks it.
+2. Git told to reach GitHub over SSH:
+
+   ```sh
+   git config --global url."git@github.com:".insteadOf https://github.com/
+   ```
+
+   This is machine-wide: every HTTPS GitHub URL that Git touches then goes
+   over SSH.
+
+To leave the machine's configuration alone, give one command the rule through
+its environment:
+
+```sh
+GIT_CONFIG_COUNT=1 \
+GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf' \
+GIT_CONFIG_VALUE_0='https://github.com/' \
+pnpm add -D github:denny-il/devenv
+```
+
+- **A missing rule can stay hidden.** Once the package is in pnpm's store,
+  `pnpm install --frozen-lockfile` passes without it, because nothing is
+  fetched. It fails when GitHub must be reached again: a fresh machine, a
+  pruned store, or a newer commit of this package.
+- **CI** needs an SSH key and the rule, or an HTTPS credential for GitHub. The
+  lockfile is the same either way.
+
+### Updating
+
+```sh
+pnpm update @denny-il/devenv
+```
+
+This moves the lockfile to the newest commit on `main`. A plain `pnpm install`
+keeps the commit the lockfile records.
+
+## Agent skill
+
+The repository carries a skill for coding agents that work in a project using
+the launcher: the commands and their rules, the config, and how to move a
+project onto it.
+
+```sh
+npx skills add git@github.com:denny-il/devenv.git
+```
+
+This form clones over SSH. The installer turns `denny-il/devenv` and
+`git+ssh://` addresses into HTTPS ones, which reach a private repository only
+on a machine with the Git rule above, or with HTTPS credentials for GitHub.
 
 ## Commands
 
@@ -200,6 +260,9 @@ projects with a Vite dev server:
 git config core.hooksPath .githooks   # once per clone
 pnpm check && pnpm test
 ```
+
+`skills/use-devenv` describes the launcher to agents in the projects that use
+it. Change it together with the behaviour it describes.
 
 Projects install this repository as it is, and Node runs no TypeScript under
 `node_modules`, so `dist/` is committed. The pre-commit hook builds and stages

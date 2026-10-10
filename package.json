@@ -11,7 +11,8 @@
   },
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "skills"
   ],
   "type": "module",
   "exports": {
