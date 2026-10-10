@@ -56,8 +56,8 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   starts and stops, exit statuses, where state lives.
 - [Config](references/config.md) - every field of `devenv.config.ts`, the
   context its functions get, and a full example.
-- [Adopting](references/adopting.md) - installing the package and what to do
-  when the install fails, what a project's Compose files and apps must look
+- [Adopting](references/adopting.md) - installing and updating the package,
+  what a project's Compose files and apps must look
   like, the steps to move a project onto the launcher, and what it
   deliberately does not do.
 - [Tailscale](references/tailscale.md) - `dev --tailscale`, `devenv setup`,

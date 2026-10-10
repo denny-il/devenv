@@ -61,47 +61,22 @@ is what has to be true of the project, then the steps to get there.
 ## Installing the package
 
 ```sh
-pnpm add -D github:denny-il/devenv
+pnpm add -D @denny-il/devenv
 ```
 
-The repository is private, and pnpm reaches GitHub over HTTPS whatever the
-specifier looks like: `github:`, `https://` and `git+ssh://` forms all resolve
-the same way, and the lockfile records an HTTPS URL. On a machine that is not
-prepared, the install fails with:
+To move to a newer version, run `pnpm update @denny-il/devenv`. It stays
+within the range in `package.json`, and before 1.0 a range such as `^0.2.0`
+covers patch releases only: `pnpm update --latest @denny-il/devenv` goes past
+it. A plain `pnpm install` keeps the version the lockfile records.
 
-```
-Failed to resolve git dependency "github:denny-il/devenv": git ls-remote failed:
-fatal: could not read Username for 'https://github.com': terminal prompts disabled
-```
+If an update keeps the older version right after a release, pnpm is holding
+the new one back: by default it prefers versions that have been out for a day
+(`minimumReleaseAge`). Listing
+the package under `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` exempts
+it; that changes the project's install policy, so suggest it, do not set it.
 
-Trying other specifier forms does not help. The remedy is in Git, not in the
-specifier:
-
-- **The machine needs an SSH key with access to the repository.** Check with
-  `ssh -T git@github.com`. Without one, stop and tell the user.
-- **Git must be told to reach GitHub over SSH.** The lasting form is
-  `git config --global url."git@github.com:".insteadOf https://github.com/`.
-  It is machine-wide, sending every HTTPS GitHub URL that Git touches over
-  SSH, so it is the user's decision: suggest it, do not set it.
-- **For your own command, pass the rule through the environment**, which
-  changes nothing on the machine:
-
-  ```sh
-  GIT_CONFIG_COUNT=1 \
-  GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf' \
-  GIT_CONFIG_VALUE_0='https://github.com/' \
-  pnpm add -D github:denny-il/devenv
-  ```
-
-A missing rule can stay hidden: once the package is in pnpm's store,
-`pnpm install --frozen-lockfile` passes without it. It fails when GitHub must
-be reached again, on a fresh machine, after the store is pruned, or when
-moving to a newer commit. An install that works on one machine is therefore no
-proof that the next machine, or CI, is prepared.
-
-To move to the newest commit of the package, run
-`pnpm update @denny-il/devenv`. A plain `pnpm install` keeps the commit the
-lockfile records.
+This skill ships with the package. After an update, install it again with
+`npx skills add ./node_modules/@denny-il/devenv`.
 
 ## What it does not do
 

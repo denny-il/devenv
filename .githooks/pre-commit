@@ -1,7 +1,0 @@
-#!/bin/sh
-# Projects install this package straight from Git, and Node runs no
-# TypeScript under node_modules: the built output is committed with its
-# source, never one without the other.
-set -e
-pnpm run build
-git add dist

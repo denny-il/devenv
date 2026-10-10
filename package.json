@@ -1,11 +1,14 @@
 {
   "name": "@denny-il/devenv",
   "version": "0.1.0",
-  "private": true,
   "description": "An isolated local development stack per worktree: Compose services, host apps, and HTTPS over Tailscale",
   "keywords": [],
-  "license": "ISC",
-  "author": "",
+  "license": "MIT",
+  "author": {
+    "name": "Denny Il",
+    "email": "ilchishin.denis@gmail.com",
+    "url": "https://github.com/denny-il"
+  },
   "bin": {
     "devenv": "./bin/devenv.js"
   },
@@ -21,6 +24,9 @@
       "default": "./dist/index.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
     "fmt": "oxfmt && oxlint --fix",
@@ -28,7 +34,9 @@
     "check:lint": "oxlint",
     "check:type": "tsc",
     "check": "pnpm run check:fmt && pnpm run check:lint && pnpm run check:type",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepack": "pnpm run build",
+    "prepublishOnly": "pnpm run check && pnpm test"
   },
   "devDependencies": {
     "@types/node": "^26.6.4",

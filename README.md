@@ -12,7 +12,7 @@ Linux and macOS, Node 22.18 or newer, Docker Compose 2.24.4 or newer.
 ## Install
 
 ```sh
-pnpm add -D github:denny-il/devenv
+pnpm add -D @denny-il/devenv
 ```
 
 ```jsonc
@@ -20,72 +20,35 @@ pnpm add -D github:denny-il/devenv
 { "scripts": { "local": "devenv" } }
 ```
 
-### While the repository is private
-
-On a machine that is not prepared, the install fails like this:
-
-```
-Failed to resolve git dependency "github:denny-il/devenv": git ls-remote failed:
-fatal: could not read Username for 'https://github.com': terminal prompts disabled
-```
-
-pnpm takes a GitHub specifier as the repository's identity, not as a choice of
-transport. `github:`, `https://` and `git+ssh://` forms all resolve through
-`https://github.com/…`, which is also what the lockfile records, so no
-SSH-looking specifier helps. The transport is the machine's
-[Git configuration](https://pnpm.io/package-sources#how-git-dependencies-are-resolved).
-
-A machine needs two things, once:
-
-1. An SSH key with access to the repository. `ssh -T git@github.com` checks it.
-2. Git told to reach GitHub over SSH:
-
-   ```sh
-   git config --global url."git@github.com:".insteadOf https://github.com/
-   ```
-
-   This is machine-wide: every HTTPS GitHub URL that Git touches then goes
-   over SSH.
-
-To leave the machine's configuration alone, give one command the rule through
-its environment:
-
-```sh
-GIT_CONFIG_COUNT=1 \
-GIT_CONFIG_KEY_0='url.git@github.com:.insteadOf' \
-GIT_CONFIG_VALUE_0='https://github.com/' \
-pnpm add -D github:denny-il/devenv
-```
-
-- **A missing rule can stay hidden.** Once the package is in pnpm's store,
-  `pnpm install --frozen-lockfile` passes without it, because nothing is
-  fetched. It fails when GitHub must be reached again: a fresh machine, a
-  pruned store, or a newer commit of this package.
-- **CI** needs an SSH key and the rule, or an HTTPS credential for GitHub. The
-  lockfile is the same either way.
-
 ### Updating
 
 ```sh
 pnpm update @denny-il/devenv
 ```
 
-This moves the lockfile to the newest commit on `main`. A plain `pnpm install`
-keeps the commit the lockfile records.
+This moves to the newest version the range in `package.json` allows. Before
+1.0 a range such as `^0.2.0` covers patch releases only; `--latest` goes past
+it.
+
+pnpm prefers versions that have been out for a day, so an update can keep the
+older version until then. To get a release at once, exempt the package in the
+project's `pnpm-workspace.yaml`:
+
+```yaml
+minimumReleaseAgeExclude:
+  - "@denny-il/devenv"
+```
 
 ## Agent skill
 
-The repository carries a skill for coding agents that work in a project using
+The package carries a skill for coding agents that work in a project using
 the launcher: the commands and their rules, the config, and how to move a
-project onto it.
+project onto it. Install it from the installed package, and again after an
+update:
 
 ```sh
-npx skills add git@github.com:denny-il/devenv.git
+npx skills add ./node_modules/@denny-il/devenv
 ```
-
-This form clones over SSH. The installer turns `denny-il/devenv` and
-`git+ssh://` addresses into HTTPS ones, which reach a private repository only
-on a machine with the Git rule above, or with HTTPS credentials for GitHub.
 
 ## Commands
 
@@ -275,13 +238,24 @@ the second, a command stops before starting anything and names the directory.
 ## Working on this package
 
 ```sh
-git config core.hooksPath .githooks   # once per clone
 pnpm check && pnpm test
 ```
 
 `skills/use-devenv` describes the launcher to agents in the projects that use
 it. Change it together with the behaviour it describes.
 
-Projects install this repository as it is, and Node runs no TypeScript under
-`node_modules`, so `dist/` is committed. The pre-commit hook builds and stages
-it with every commit.
+Releases are published from a checkout, not by CI. `pnpm publish` runs the
+checks and tests and builds `dist/`, which is not committed. The version is
+committed only once npm has the package, so a release that fails leaves
+nothing behind but a changed `package.json`:
+
+```sh
+pnpm version patch --no-git-tag-version   # or minor
+pnpm publish --dry-run --no-git-checks
+pnpm publish --no-git-checks
+git commit -am "chore: release <version>" && git tag v<version>
+git push origin main v<version>
+```
+
+`.agents/skills/release` gives an agent the same steps, with what to check
+first and what to do when one fails.
