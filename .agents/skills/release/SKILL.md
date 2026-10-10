@@ -57,9 +57,23 @@ does. Then:
 pnpm publish --no-git-checks
 ```
 
-npm asks for a second factor here. If the command wants a one-time password,
-ask the user for the code and run it again with `--otp <code>`. If it prints a
-link to approve in a browser, give the user the link and wait.
+npm asks for a second factor here, and pnpm will not ask for it in a shell
+that is not a terminal, as an agent's usually is not: it stops with
+`ERR_PNPM_OTP_NON_INTERACTIVE`, having published nothing. Then either:
+
+- **The user has a one-time code:** run the publish again with `--otp <code>`.
+- **Otherwise, run it under a pseudo-terminal**, in the background, with its
+  output in a file:
+
+  ```sh
+  tail -f /dev/null | script -qfec "pnpm publish --no-git-checks" /tmp/devenv-publish.log
+  ```
+
+  It prints `Authenticate your account at:` with a link, and waits. Give the
+  user the link and wait for the command to end; `Published package` in the
+  file means npm accepted it. Do not press ENTER for it: that opens a browser
+  on this machine. This is the `script` of Linux; the one on macOS takes its
+  arguments in another order.
 
 Once it has succeeded:
 
@@ -68,8 +82,12 @@ version=$(node -p 'require("./package.json").version')
 git commit -am "chore: release $version"
 git tag "v$version"
 git push origin main "v$version"
-pnpm view @denny-il/devenv version   # the new version, after a moment
+pnpm view @denny-il/devenv version
 ```
+
+The registry can take a minute or two to show a new version, and answers
+`Not found` or the old one until then. The `0.0.0-stage` in its list of
+versions is npm's own placeholder from the first publish, not a release.
 
 ## When a step fails
 
