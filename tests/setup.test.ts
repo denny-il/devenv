@@ -1,5 +1,5 @@
 import { expect, test, vi } from "vitest";
-import { type Requirement, meet } from "./setup.ts";
+import { type Requirement, meet } from "../src/setup.ts";
 
 /** A requirement that is unmet until `fixedBy` has run, if it ever does. */
 function requirement(

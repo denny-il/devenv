@@ -3,6 +3,7 @@ import { dirname, resolve } from "node:path";
 import { findConfig, loadConfig } from "./config.ts";
 import { type Project, createProject, dev, down, runCommand, status, test, up } from "./stack.ts";
 import { setup } from "./setup.ts";
+import { list, prune } from "./stacks.ts";
 import { info, serve } from "./tailnet.ts";
 
 const usage = `Usage: devenv <command>
@@ -18,8 +19,14 @@ Commands:
                            always removed
   down                     Stop services and keep their volumes
   reset                    Stop services and delete this worktree's volumes
-  setup                    Install and set up Docker and Tailscale on this
-                           machine
+  list                     Show every stack on this machine
+  prune [--yes]            Remove the stacks whose checkout is gone, with
+                           their data
+  setup [docker] [tailscale]
+                           Install and set up Docker and Tailscale on this
+                           machine; both unless one is named
+  setup codex              Have the Codex app remove a worktree's stack when
+                           it deletes the worktree
   tailnet info [--json]    Show this machine's tailnet name and what keeps it
                            from serving, if anything
   tailnet serve <port>...  Serve https://<machine>:<port> from
@@ -71,9 +78,20 @@ export async function main(argv: string[]): Promise<void> {
       noArguments(command, args);
       await down(await loadProject(), true);
       break;
-    case "setup":
+    case "list":
       noArguments(command, args);
-      await setup();
+      await list();
+      break;
+    case "prune":
+      if (args.length > 1 || (args.length === 1 && args[0] !== "--yes"))
+        throw new Error("`devenv prune` takes only `--yes`");
+      await prune({ yes: args.length === 1 });
+      break;
+    case "setup":
+      await setup(args, async () => {
+        const { root, config } = await loadProject();
+        return { root, name: config.name };
+      });
       break;
     case "tailnet": {
       const [subcommand, ...rest] = args;

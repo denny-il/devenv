@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { appPorts, createContext, createEnvironment } from "./context.ts";
+import { appPorts, createContext, createEnvironment } from "../src/context.ts";
 
 const state = {
   root: "/project",

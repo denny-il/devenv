@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { parsePublishedPorts, supportsComposeVersion } from "./compose.ts";
+import { parsePublishedPorts, supportsComposeVersion } from "../src/compose.ts";
 
 test("Compose versions from 2.24.4 are supported", () => {
   expect(supportsComposeVersion("2.24.4")).toBe(true);

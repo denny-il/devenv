@@ -31,17 +31,17 @@ async function startStack(project, earlier) {
     if (!isDeepStrictEqual(composeEnv, stringValues(project.config.compose.env)))
         console.warn("`compose.env` differs from what this stack was created with, which stays in use. Run `devenv reset` to start over with the new values.");
     // Before anything creates a volume: a first start that fails halfway must
-    // not forget what its volumes were created with.
-    if (!earlier)
-        await writeState({
-            version: 1,
-            root: project.root,
-            project: project.name,
-            composeEnv,
-            services: {},
-            apps: {},
-            stopped: true,
-        });
+    // not forget what its volumes were created with. Written on later starts
+    // too, unchanged, so one that cannot save its state starts nothing.
+    await writeState(earlier ?? {
+        version: 1,
+        root: project.root,
+        project: project.name,
+        composeEnv,
+        services: {},
+        apps: {},
+        stopped: true,
+    });
     const services = await startServices(devTarget(project, composeEnv), project.config.compose.init ?? []);
     return { composeEnv, services };
 }
@@ -58,7 +58,7 @@ function printStack(config, context) {
 }
 /** `devenv up`: the services alone, and ports for the apps' URLs. */
 export async function up(project) {
-    const earlier = await readState(project.root, project.name);
+    const earlier = await readState(project.name);
     const started = await startStack(project, earlier);
     const reservations = await reserveAppPorts(project.config.apps ?? {}, earlier?.apps);
     await reservations.releaseAll();
@@ -69,7 +69,7 @@ export async function up(project) {
         ...started,
         apps: reservations.apps,
     });
-    console.log(`State: ${statePath(project.root)}`);
+    console.log(`State: ${statePath(project.name)}`);
 }
 /** `devenv dev`: services, setup, then every app until one stops. */
 export async function dev(project, options) {
@@ -78,7 +78,7 @@ export async function dev(project, options) {
     // ports are served to the tailnet over HTTPS under this machine's name
     // there, which then names every app URL.
     const tailnet = options.tailscale ? await tailnetHost() : undefined;
-    const earlier = await readState(root, project.name);
+    const earlier = await readState(project.name);
     const started = await startStack(project, earlier);
     const reservations = await reserveAppPorts(config.apps ?? {}, earlier?.apps);
     try {
@@ -226,13 +226,13 @@ async function runApps(config, state, reservations) {
 /** `devenv status` */
 export async function status(project) {
     await ensureDocker(project.root);
-    const state = await readState(project.root, project.name);
+    const state = await readState(project.name);
     await compose(devTarget(project, composeEnvOf(project, state)), ["ps"]);
     if (!state) {
-        console.log(`No stack yet: nothing at ${statePath(project.root)}`);
+        console.log(`No stack yet: nothing at ${statePath(project.name)}`);
         return;
     }
-    console.log(`State: ${statePath(project.root)}`);
+    console.log(`State: ${statePath(project.name)}`);
     if (state.stopped)
         console.log("The services are stopped.");
     else
@@ -243,15 +243,15 @@ export async function down(project, removeVolumes) {
     await ensureDocker(project.root);
     // `reset` must work on a state it cannot read.
     const state = removeVolumes
-        ? await readState(project.root, project.name).catch(() => null)
-        : await readState(project.root, project.name);
+        ? await readState(project.name).catch(() => null)
+        : await readState(project.name);
     await compose(devTarget(project, composeEnvOf(project, state)), [
         "down",
         "--remove-orphans",
         ...(removeVolumes ? ["--volumes", "--rmi", "local"] : []),
     ]);
     if (removeVolumes) {
-        await removeState(project.root);
+        await removeState(project.name);
         return;
     }
     // The kept volumes keep what they were created with, and the apps their
@@ -261,7 +261,7 @@ export async function down(project, removeVolumes) {
 }
 /** `devenv run -- <command>` */
 export async function runCommand(project, command) {
-    const state = await readState(project.root, project.name);
+    const state = await readState(project.name);
     if (!state || state.stopped)
         throw new Error("Run `devenv up` first");
     const child = spawnCommand(command, {

@@ -1,4 +1,5 @@
 import { userInfo } from "node:os";
+import { setupCodex } from "./codex.js";
 import { composeVersionMinimum, supportsComposeVersion } from "./compose.js";
 import { describeCommand, run } from "./process.js";
 import { certificatesOff, inspect } from "./tailnet.js";
@@ -141,17 +142,37 @@ export async function meet(requirements, runFix) {
     }
     return true;
 }
-/** `devenv setup`: installs and sets up what stacks need on this machine. */
-export async function setup() {
+const machine = ["docker", "tailscale"];
+const targets = [...machine, "codex"];
+/**
+ * `devenv setup [docker] [tailscale] [codex]`: installs and sets up what
+ * stacks need on this machine, Docker and Tailscale unless told which.
+ * `codex` sets up the project it is run in, so only when named.
+ */
+export async function setup(wanted, project) {
     const { platform } = process;
     if (platform !== "linux" && platform !== "darwin")
         throw new Error("`devenv setup` knows Linux and macOS only");
+    const unknown = wanted.filter((target) => !targets.includes(target));
+    if (unknown.length)
+        throw new Error(`\`devenv setup\` knows ${targets.join(", ")}, not ${unknown.join(", ")}`);
     const user = userInfo().username;
     // A command that fails shows in the requirement staying unmet.
     const runFix = (command) => run(command, { cwd, reject: false });
-    const context = (await output(["docker", "context", "show"]))?.trim();
-    const docker = await meet(dockerRequirements(platform, user, context), runFix);
-    const tailscale = await meet(tailscaleRequirements(platform, user), runFix);
-    if (!docker || !tailscale)
+    let met = true;
+    for (const target of machine) {
+        if (wanted.length && !wanted.includes(target))
+            continue;
+        const requirements = target === "docker"
+            ? dockerRequirements(platform, user, (await output(["docker", "context", "show"]))?.trim())
+            : tailscaleRequirements(platform, user);
+        if (!(await meet(requirements, runFix)))
+            met = false;
+    }
+    if (!met)
         process.exitCode = 1;
+    if (wanted.includes("codex")) {
+        const { root, name } = await project();
+        await setupCodex(root, name);
+    }
 }

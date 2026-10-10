@@ -1,6 +1,6 @@
 import { connect } from "node:net";
 import { expect, test } from "vitest";
-import { reserveAppPorts, reservePort } from "./ports.ts";
+import { reserveAppPorts, reservePort } from "../src/ports.ts";
 
 test("a preferred port is reserved while it is free, else any other", async () => {
   const first = await reservePort();

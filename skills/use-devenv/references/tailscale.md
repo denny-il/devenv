@@ -21,16 +21,14 @@ Everyone who can reach the machine on the tailnet, including users it is
 shared with, reaches the stack. Turn it on when the user asks for access from
 another device, not by default.
 
-A dev server that hands out files of the workspace must not hand out `.dev/`:
-the state file there holds the services' credentials.
-
 Never run `tailscale serve reset`: the serve configuration is shared by the
 whole machine, and that command wipes every project's entries.
 
 ## `devenv setup`
 
 Checks what a stack needs on this machine, installs what is missing, and
-prints one line per requirement. It changes nothing that is already in place,
+prints one line per requirement. `devenv setup docker` or
+`devenv setup tailscale` does one of the two. It changes nothing that is already in place,
 so run it again until every line is checked.
 
 - **Linux:** installs Docker and Tailscale with their own install scripts,

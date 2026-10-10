@@ -89,24 +89,28 @@ on a machine with the Git rule above, or with HTTPS credentials for GitHub.
 
 ## Commands
 
-| Command                   | What it does                                                                    |
-| ------------------------- | ------------------------------------------------------------------------------- |
-| `devenv up`               | Starts this worktree's services.                                                |
-| `devenv dev`              | Starts the services, runs `setup`, then runs every app until one stops.         |
-| `devenv dev --tailscale`  | The same, with the apps served to this machine's tailnet over HTTPS.            |
-| `devenv status`           | Shows the services and the app URLs.                                            |
-| `devenv run -- <command>` | Runs a command with the stack's environment.                                    |
-| `devenv test [-- <args>]` | Runs the tests on a fresh stack of their own, always removed afterwards.        |
-| `devenv down`             | Stops the services and keeps their volumes.                                     |
-| `devenv reset`            | Stops the services and deletes this worktree's volumes, images and state.       |
-| `devenv setup`            | Installs Docker and Tailscale on this machine, and sets them up.                |
-| `devenv tailnet info`     | Shows this machine's tailnet name and what keeps it from serving, if anything.  |
-| `devenv tailnet serve`    | Serves the given local ports to the tailnet until stopped, without any project. |
+| Command                             | What it does                                                                    |
+| ----------------------------------- | ------------------------------------------------------------------------------- |
+| `devenv up`                         | Starts this worktree's services.                                                |
+| `devenv dev`                        | Starts the services, runs `setup`, then runs every app until one stops.         |
+| `devenv dev --tailscale`            | The same, with the apps served to this machine's tailnet over HTTPS.            |
+| `devenv status`                     | Shows the services and the app URLs.                                            |
+| `devenv run -- <command>`           | Runs a command with the stack's environment.                                    |
+| `devenv test [-- <args>]`           | Runs the tests on a fresh stack of their own, always removed afterwards.        |
+| `devenv down`                       | Stops the services and keeps their volumes.                                     |
+| `devenv reset`                      | Stops the services and deletes this worktree's volumes, images and state.       |
+| `devenv list`                       | Shows every stack on this machine.                                              |
+| `devenv prune`                      | Removes the stacks whose checkout is gone, with their data.                     |
+| `devenv setup [docker] [tailscale]` | Installs Docker and Tailscale on this machine, and sets them up.                |
+| `devenv setup codex`                | Has the Codex app remove a worktree's stack when it deletes the worktree.       |
+| `devenv tailnet info`               | Shows this machine's tailnet name and what keeps it from serving, if anything.  |
+| `devenv tailnet serve`              | Serves the given local ports to the tailnet until stopped, without any project. |
 
 ## Setting up a machine
 
 `devenv setup` checks what a stack needs on this machine and installs what is
-missing: Docker and Tailscale with their own installers on Linux, with
+missing. `devenv setup docker` and `devenv setup tailscale` do one of the two.
+It installs Docker and Tailscale with their own installers on Linux, with
 Homebrew on macOS. The installers ask for a password.
 
 On Linux it also starts both, signs in to Tailscale, and lets your user run
@@ -220,8 +224,10 @@ The functions get the stack as a context:
 - **Ports.** Docker assigns the services' ports; the launcher picks free
   ports for the apps and uses the same ones on the next run while they are
   free, so URLs open elsewhere keep working.
-- **State.** `.dev/devenv/state.json` holds the ports and the Compose
-  variables. The directory ignores itself in Git.
+- **State.** Each stack's ports and Compose variables are kept in
+  `~/.local/state/devenv/stacks/<project>.json` (under `$XDG_STATE_HOME` when
+  that is set), not in the checkout. So the credentials are in no workspace,
+  and a stack can still be found after its checkout is gone.
 - **Stopping.** One signal stops every app and whatever each started; what
   has not stopped ten seconds later is killed. Any app stopping stops the
   stack.
@@ -245,14 +251,40 @@ The first request to a new name can take half a minute while its certificate
 is issued. The entries disappear with the launcher; nothing here ever runs
 `tailscale serve reset`, which would wipe every project's entries.
 
-Everyone who can reach this machine on the tailnet reaches the stack. For
-projects with a Vite dev server:
+Everyone who can reach this machine on the tailnet reaches the stack. For a
+Vite dev server the launcher sets `__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`, so
+it accepts the tailnet name without a config change.
 
-- The launcher lets Vite accept the tailnet name
-  (`__VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS`); no config change is needed.
-- Vite serves workspace files to whoever reaches it. Deny the state file in
-  the project's Vite config, `server.fs.deny: ['**/.dev/**', ...]`, restating
-  Vite's own defaults, which a custom list replaces.
+## Every stack on the machine
+
+`devenv list` shows each stack with its checkout and whether it is running,
+stopped or orphaned. A stack is orphaned once its checkout is gone, which
+happens when a worktree is deleted without `devenv reset`: its containers and
+volumes stay in Docker with nothing left to manage them.
+
+`devenv prune` lists the orphans and, after a yes, removes them with their
+data. A checkout that was moved, or sits on a disk that is not mounted, looks
+the same as a deleted one, so read the list before agreeing. Without a
+terminal it removes nothing unless given `--yes`.
+
+## Worktrees the Codex app manages
+
+The Codex desktop app deletes a chat's worktree when the chat is archived, and
+when it trims old worktrees. `devenv setup codex`, run in the project, has it
+remove the worktree's stack first. It adds a cleanup script to the project's
+local environment in `.codex/environments/`, creating one if there is none.
+
+- Commit the file, and pick that environment when starting a worktree chat.
+  The app runs the cleanup only for worktrees created with it.
+- The script never fails, since a failing one would keep the app from deleting
+  the worktree. A stack it could not remove is left for `devenv prune`.
+- Only the desktop app runs these scripts. The Codex CLI does not.
+
+## Under a sandbox
+
+An agent that runs commands in a sandbox needs two things allowed for the
+launcher: the Docker socket, and writing to `~/.local/state/devenv`. Without
+the second, a command stops before starting anything and names the directory.
 
 ## Working on this package
 

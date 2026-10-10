@@ -1,15 +1,25 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
-export function stateDirectory(root) {
-    return resolve(root, ".dev/devenv");
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, isAbsolute, resolve } from "node:path";
+/**
+ * Where every stack on this machine keeps its state: outside the checkouts,
+ * so a stack can be found, and removed, after its checkout is gone, and its
+ * credentials are in no workspace a dev server might hand out.
+ */
+export function stateHome() {
+    return resolve(process.env.XDG_STATE_HOME || resolve(homedir(), ".local/state"), "devenv");
 }
-export function statePath(root) {
-    return resolve(stateDirectory(root), "state.json");
+function stacksDirectory() {
+    return resolve(stateHome(), "stacks");
+}
+/** The state file of a stack, by its Compose project, which no two checkouts share. */
+export function statePath(project) {
+    return resolve(stacksDirectory(), `${project}.json`);
 }
 function isRecord(value) {
     return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-/** The ports of a table in the state file; anything else in it is dropped. */
+/** The ports of a table in a state file; anything else in it is dropped. */
 function portTable(value) {
     const table = {};
     for (const [name, entry] of Object.entries(isRecord(value) ? value : {})) {
@@ -22,16 +32,22 @@ function portTable(value) {
     }
     return table;
 }
+// What the launcher names a checkout's Compose project. `prune` hands the
+// name to Docker, so nothing else may pass for one.
+const projectPattern = /^[a-z0-9][a-z0-9_-]*-local-[0-9a-f]{12}$/;
 /**
- * The state file's content as a state of `project`, or nothing when it is
- * another project's: a copied worktree starts a stack of its own.
+ * A state file's content as the state of `project`, the stack the file is
+ * named after. A file that speaks for another stack, or names no checkout,
+ * is refused: it could have `prune` remove a stack that is in use.
  */
 export function parseState(content, project) {
     const value = JSON.parse(content);
     if (!isRecord(value) || value.version !== 1 || !isRecord(value.composeEnv))
         throw new Error("not a state this version writes");
-    if (value.project !== project)
-        return null;
+    if (value.project !== project || !projectPattern.test(project))
+        throw new Error("not the state of the stack it is filed under");
+    if (typeof value.root !== "string" || !isAbsolute(value.root))
+        throw new Error("it names no checkout");
     const composeEnv = {};
     for (const [key, item] of Object.entries(value.composeEnv)) {
         if (typeof item !== "string")
@@ -40,7 +56,7 @@ export function parseState(content, project) {
     }
     return {
         version: 1,
-        root: String(value.root),
+        root: value.root,
         project,
         composeEnv,
         services: portTable(value.services),
@@ -49,8 +65,8 @@ export function parseState(content, project) {
         ...(value.stopped === true ? { stopped: true } : {}),
     };
 }
-export async function readState(root, project) {
-    const path = statePath(root);
+export async function readState(project) {
+    const path = statePath(project);
     let content;
     try {
         content = await readFile(path, "utf8");
@@ -70,18 +86,47 @@ export async function readState(root, project) {
     }
 }
 export async function writeState(state) {
-    const directory = stateDirectory(state.root);
-    await mkdir(directory, { recursive: true });
-    // The state holds the services' credentials: out of version control
-    // wherever the project keeps its ignore rules.
-    await writeFile(resolve(directory, ".gitignore"), "*\n");
-    const path = statePath(state.root);
+    const path = statePath(state.project);
     const temporaryPath = `${path}.${process.pid}.tmp`;
-    await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, {
-        mode: 0o600,
-    });
-    await rename(temporaryPath, path);
+    try {
+        // The states hold the services' credentials.
+        await mkdir(stacksDirectory(), { recursive: true, mode: 0o700 });
+        await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+        await rename(temporaryPath, path);
+    }
+    catch (error) {
+        const { code } = error;
+        if (code !== "EACCES" && code !== "EPERM" && code !== "EROFS")
+            throw error;
+        // A sandbox, most likely: the state is kept outside the checkout.
+        throw new Error(`Cannot write ${path}. devenv keeps every stack's state under ${stateHome()}; allow writing there.`, { cause: error });
+    }
 }
-export async function removeState(root) {
-    await rm(stateDirectory(root), { force: true, recursive: true });
+export async function removeState(project) {
+    await rm(statePath(project), { force: true });
+}
+/** The state of every stack on this machine that can be read. */
+export async function listStates() {
+    let names;
+    try {
+        names = await readdir(stacksDirectory());
+    }
+    catch (error) {
+        if (error.code === "ENOENT")
+            return [];
+        throw error;
+    }
+    const states = [];
+    for (const name of names.toSorted()) {
+        if (!name.endsWith(".json"))
+            continue;
+        try {
+            const content = await readFile(resolve(stacksDirectory(), name), "utf8");
+            states.push(parseState(content, basename(name, ".json")));
+        }
+        catch {
+            console.warn(`Skipping ${resolve(stacksDirectory(), name)}: it cannot be read`);
+        }
+    }
+    return states;
 }

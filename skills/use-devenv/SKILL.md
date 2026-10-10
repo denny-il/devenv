@@ -39,8 +39,16 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   stack.
 - **Use `--tailscale` only when asked to.** It makes the stack, and whatever
   sign-in the project prefills, reachable by everyone on the tailnet.
-- **Treat `.dev/devenv/state.json` as a secret.** It holds the services'
-  credentials. Do not print, copy or commit it; ask `status` or `run` instead.
+- **State lives outside the checkout**, in `~/.local/state/devenv`. It holds
+  the services' credentials, so do not print or copy it; ask `status` or `run`
+  instead.
+- **In a sandbox, ask for access instead of working around it.** The launcher
+  needs the Docker socket and write access to `~/.local/state/devenv`. When a
+  command fails with "Cannot write … allow writing there", ask the user to
+  allow that directory; pointing the state somewhere else would start a
+  second stack that nothing else knows about.
+- **Run `devenv prune` only when asked to.** It deletes the data of stacks
+  whose checkout is gone, and a checkout that was merely moved looks the same.
 
 ## References
 

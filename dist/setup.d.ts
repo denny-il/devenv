@@ -15,5 +15,12 @@ export interface Requirement {
  * whether all are met.
  */
 export declare function meet(requirements: Requirement[], runFix: (command: Command) => Promise<unknown>): Promise<boolean>;
-/** `devenv setup`: installs and sets up what stacks need on this machine. */
-export declare function setup(): Promise<void>;
+/**
+ * `devenv setup [docker] [tailscale] [codex]`: installs and sets up what
+ * stacks need on this machine, Docker and Tailscale unless told which.
+ * `codex` sets up the project it is run in, so only when named.
+ */
+export declare function setup(wanted: string[], project: () => Promise<{
+    root: string;
+    name: string;
+}>): Promise<void>;

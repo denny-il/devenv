@@ -6,7 +6,7 @@ import {
   projectName,
   testProjectLauncher,
   testProjectPrefix,
-} from "./names.ts";
+} from "../src/names.ts";
 
 test("a checkout names its own projects", () => {
   expect(projectName("app", tmpdir())).toMatch(/^app-local-[0-9a-f]{12}$/);

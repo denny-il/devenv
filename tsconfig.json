@@ -1,7 +1,5 @@
 {
   "compilerOptions": {
-    "rootDir": "./src",
-    "outDir": "./dist",
     "noEmit": true,
 
     "module": "nodenext",
@@ -25,5 +23,5 @@
     "moduleDetection": "force",
     "skipLibCheck": true
   },
-  "include": ["src"]
+  "include": ["src", "tests"]
 }

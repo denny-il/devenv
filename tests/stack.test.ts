@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
-import { exitStatus } from "./process.ts";
-import { isTestLauncher, testCommand } from "./stack.ts";
+import { exitStatus } from "../src/process.ts";
+import { isTestLauncher, testCommand } from "../src/stack.ts";
 
 test("a test launcher is told from whatever else has its PID", () => {
   expect(isTestLauncher("node /project/node_modules/@denny-il/devenv/bin/devenv.js test\n")).toBe(

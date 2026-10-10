@@ -4,20 +4,23 @@ All commands find `devenv.config.ts` (or `.js`) in the current directory or
 any directory above it; that directory is the project root. The root `.env` is
 loaded first, and variables already set in the environment win over it.
 
-`setup` and `tailnet` need no project.
+`list`, `prune`, `tailnet` and `setup` need no project, except `setup codex`.
 
-| Command                        | What it does                                                       |
-| ------------------------------ | ------------------------------------------------------------------ |
-| `devenv up`                    | Starts the services and assigns the app ports.                     |
-| `devenv dev [--tailscale]`     | Starts the services, runs `setup`, runs every app until one stops. |
-| `devenv status`                | Lists the containers, the app URLs and the project's `info` lines. |
-| `devenv run -- <command>`      | Runs a command with the stack's environment.                       |
-| `devenv test [-- <args>]`      | Runs the tests on a fresh stack that is always removed.            |
-| `devenv down`                  | Stops the services; keeps volumes, credentials and app ports.      |
-| `devenv reset`                 | Removes containers, volumes, locally built images and the state.   |
-| `devenv setup`                 | Installs and sets up Docker and Tailscale on this machine.         |
-| `devenv tailnet info [--json]` | Prints this machine's tailnet name and what keeps it from serving. |
-| `devenv tailnet serve <port>…` | Serves local ports to the tailnet over HTTPS until stopped.        |
+| Command                             | What it does                                                                                                                        |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `devenv up`                         | Starts the services and assigns the app ports.                                                                                      |
+| `devenv dev [--tailscale]`          | Starts the services, runs `setup`, runs every app until one stops.                                                                  |
+| `devenv status`                     | Lists the containers, the app URLs and the project's `info` lines.                                                                  |
+| `devenv run -- <command>`           | Runs a command with the stack's environment.                                                                                        |
+| `devenv test [-- <args>]`           | Runs the tests on a fresh stack that is always removed.                                                                             |
+| `devenv down`                       | Stops the services; keeps volumes, credentials and app ports.                                                                       |
+| `devenv reset`                      | Removes containers, volumes, locally built images and the state.                                                                    |
+| `devenv list`                       | Shows every stack on this machine.                                                                                                  |
+| `devenv prune [--yes]`              | Removes the stacks whose checkout is gone, with their data.                                                                         |
+| `devenv setup [docker] [tailscale]` | Installs and sets up Docker and Tailscale on this machine; both unless one is named.                                                |
+| `devenv setup codex`                | Adds a cleanup script to the project's Codex environment, so the Codex app removes a worktree's stack when it deletes the worktree. |
+| `devenv tailnet info [--json]`      | Prints this machine's tailnet name and what keeps it from serving.                                                                  |
+| `devenv tailnet serve <port>…`      | Serves local ports to the tailnet over HTTPS until stopped.                                                                         |
 
 ## How a stack starts
 
@@ -62,11 +65,26 @@ answer. Wait for an app's own "listening" line, or poll its URL.
   outright is cleaned up by the next `devenv test` in the same worktree.
 - The exit status is the test command's, or 130 after Ctrl-C.
 
+## `list` and `prune`
+
+- `list` prints every stack on the machine: its Compose project, whether it
+  is `running`, `stopped` or `orphaned`, and its checkout.
+- A stack is orphaned once its checkout no longer exists, typically a
+  worktree deleted without `devenv reset`. Its containers and volumes are
+  still in Docker.
+- `prune` lists the orphans and asks before removing their containers,
+  volumes, network and state. Without a terminal it refuses unless given
+  `--yes`.
+- A checkout that was moved, or is on a disk not mounted now, is reported as
+  orphaned too. Show the user the list; do not pass `--yes` on your own.
+
 ## State
 
-- `.dev/devenv/state.json` in the project root holds the published service
-  ports, the app ports, and the Compose variables the stack was created with.
-  The directory ignores itself in Git.
+- `~/.local/state/devenv/stacks/<project>.json` holds a stack's checkout
+  path, published service ports, app ports, and the Compose variables it was
+  created with. `$XDG_STATE_HOME` replaces `~/.local/state` when set. Nothing
+  is written into the checkout.
+- A command that cannot write there stops before it starts anything.
 - Compose projects are named `<name>-local-<id>` and
   `<name>-test-<id>-<pid>-<run>`, where `<id>` is derived from the checkout's
   path. Moving or copying a checkout therefore starts a new, empty stack.
