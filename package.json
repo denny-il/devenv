@@ -1,0 +1,56 @@
+{
+  "name": "@denny-il/devenv",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An isolated local development stack per worktree: Compose services, host apps, and HTTPS over Tailscale",
+  "keywords": [],
+  "license": "ISC",
+  "author": "",
+  "bin": {
+    "devenv": "./bin/devenv.js"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "fmt": "oxfmt && oxlint --fix",
+    "check:fmt": "oxfmt --check",
+    "check:lint": "oxlint",
+    "check:type": "tsc",
+    "check": "pnpm run check:fmt && pnpm run check:lint && pnpm run check:type",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0",
+    "oxlint-tsgolint": "^7.0.2003",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.3"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.10.1",
+      "onFail": "download"
+    },
+    "runtime": {
+      "name": "node",
+      "version": "26.11.1",
+      "onFail": "download"
+    }
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "packageManager": "pnpm@12.10.1"
+}
