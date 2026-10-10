@@ -39,8 +39,23 @@ git config --global url."git@github.com:".insteadOf "https://github.com/"
 | `devenv test [-- <args>]` | Runs the tests on a fresh stack of their own, always removed afterwards.        |
 | `devenv down`             | Stops the services and keeps their volumes.                                     |
 | `devenv reset`            | Stops the services and deletes this worktree's volumes, images and state.       |
+| `devenv setup`            | Installs Docker and Tailscale on this machine, and sets them up.                |
 | `devenv tailnet info`     | Shows this machine's tailnet name and what keeps it from serving, if anything.  |
 | `devenv tailnet serve`    | Serves the given local ports to the tailnet until stopped, without any project. |
+
+## Setting up a machine
+
+`devenv setup` checks what a stack needs on this machine and installs what is
+missing: Docker and Tailscale with their own installers on Linux, with
+Homebrew on macOS. The installers ask for a password.
+
+On Linux it also starts both, signs in to Tailscale, and lets your user run
+Docker and serve over Tailscale. What only a person can do is printed: on
+macOS opening the two apps and signing in, and on any machine enabling HTTPS
+certificates for the tailnet.
+
+Run it again until every line is checked; it changes nothing that is already
+in place.
 
 ## What a project provides
 

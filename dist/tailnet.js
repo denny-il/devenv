@@ -19,6 +19,7 @@ function tailscale(args) {
         child.on("close", () => resolveOutput(stdout));
     });
 }
+export const certificatesOff = "HTTPS certificates are off for this tailnet. Enable them: https://login.tailscale.com/admin/dns";
 /**
  * This machine on the tailnet: its name, and what keeps it from serving over
  * HTTPS, each with its remedy. Whether this user may serve shows only when
@@ -47,7 +48,7 @@ export async function inspect() {
         problems.push("This machine has no tailnet name. Enable MagicDNS: https://login.tailscale.com/admin/dns");
     // With them off, `tailscale serve` waits for an approval in a browser.
     else if (!status.CertDomains?.includes(host))
-        problems.push("HTTPS certificates are off for this tailnet. Enable them: https://login.tailscale.com/admin/dns");
+        problems.push(certificatesOff);
     return { host, problems };
 }
 /** This machine's tailnet name, once nothing found keeps it from serving. */

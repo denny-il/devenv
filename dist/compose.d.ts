@@ -1,4 +1,5 @@
 import { type RunOptions, type RunResult } from "./process.ts";
+export declare const composeVersionMinimum: number[];
 /** A Compose project and what its files are read with. */
 export interface ComposeTarget {
     root: string;

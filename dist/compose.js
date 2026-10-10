@@ -1,13 +1,13 @@
 import { connect } from "node:net";
 import { run } from "./process.js";
 // `!reset` in an overlay, which a test overlay drops named volumes with.
-const versionMinimum = [2, 24, 4];
+export const composeVersionMinimum = [2, 24, 4];
 export function supportsComposeVersion(version) {
     const match = version.trim().match(/v?(\d+)\.(\d+)\.(\d+)/);
     if (!match)
         return false;
     const current = match.slice(1).map(Number);
-    for (const [index, minimum] of versionMinimum.entries()) {
+    for (const [index, minimum] of composeVersionMinimum.entries()) {
         const part = current[index] ?? 0;
         if (part > minimum)
             return true;
@@ -33,7 +33,7 @@ export async function ensureDocker(cwd) {
         capture: true,
     });
     if (!supportsComposeVersion(stdout))
-        throw new Error(`Docker Compose ${versionMinimum.join(".")} or newer is required; found ${stdout.trim()}`);
+        throw new Error(`Docker Compose ${composeVersionMinimum.join(".")} or newer is required; found ${stdout.trim()}`);
 }
 export function compose(target, args, options = {}) {
     const { root, project, files, env, signal } = target;

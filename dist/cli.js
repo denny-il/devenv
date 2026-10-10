@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { findConfig, loadConfig } from "./config.js";
 import { createProject, dev, down, runCommand, status, test, up } from "./stack.js";
+import { setup } from "./setup.js";
 import { info, serve } from "./tailnet.js";
 const usage = `Usage: devenv <command>
 
@@ -16,6 +17,8 @@ Commands:
                            always removed
   down                     Stop services and keep their volumes
   reset                    Stop services and delete this worktree's volumes
+  setup                    Install and set up Docker and Tailscale on this
+                           machine
   tailnet info [--json]    Show this machine's tailnet name and what keeps it
                            from serving, if anything
   tailnet serve <port>...  Serve https://<machine>:<port> from
@@ -66,6 +69,10 @@ export async function main(argv) {
         case "reset":
             noArguments(command, args);
             await down(await loadProject(), true);
+            break;
+        case "setup":
+            noArguments(command, args);
+            await setup();
             break;
         case "tailnet": {
             const [subcommand, ...rest] = args;

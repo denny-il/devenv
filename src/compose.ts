@@ -2,7 +2,7 @@ import { connect } from "node:net";
 import { type RunOptions, type RunResult, run } from "./process.ts";
 
 // `!reset` in an overlay, which a test overlay drops named volumes with.
-const versionMinimum = [2, 24, 4];
+export const composeVersionMinimum = [2, 24, 4];
 
 /** A Compose project and what its files are read with. */
 export interface ComposeTarget {
@@ -21,7 +21,7 @@ export function supportsComposeVersion(version: string): boolean {
   if (!match) return false;
 
   const current = match.slice(1).map(Number);
-  for (const [index, minimum] of versionMinimum.entries()) {
+  for (const [index, minimum] of composeVersionMinimum.entries()) {
     const part = current[index] ?? 0;
     if (part > minimum) return true;
     if (part < minimum) return false;
@@ -50,7 +50,7 @@ export async function ensureDocker(cwd: string): Promise<void> {
   });
   if (!supportsComposeVersion(stdout))
     throw new Error(
-      `Docker Compose ${versionMinimum.join(".")} or newer is required; found ${stdout.trim()}`,
+      `Docker Compose ${composeVersionMinimum.join(".")} or newer is required; found ${stdout.trim()}`,
     );
 }
 

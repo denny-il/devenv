@@ -1,3 +1,4 @@
+export declare const certificatesOff = "HTTPS certificates are off for this tailnet. Enable them: https://login.tailscale.com/admin/dns";
 export interface Tailnet {
     host: string | null;
     problems: string[];
