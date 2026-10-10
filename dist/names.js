@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
+/** What tells a checkout's stacks from every other's: a digest of its real path. */
+export function checkoutIdentity(realRoot) {
+    return createHash("sha256").update(realRoot).digest("hex").slice(0, 12);
+}
 function worktreeIdentity(root) {
-    return createHash("sha256").update(realpathSync(root)).digest("hex").slice(0, 12);
+    return checkoutIdentity(realpathSync(root));
 }
 /** The Compose project of the checkout at `root`, so worktrees run side by side. */
 export function projectName(name, root) {

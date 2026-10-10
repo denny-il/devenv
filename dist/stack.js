@@ -1,6 +1,7 @@
+import { realpathSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { compose, composeProjects, ensureDocker, startServices, } from "./compose.js";
+import { compose, composeProjects, ensureDocker, removeVolumesOf, startServices, } from "./compose.js";
 import { defaultPorts } from "./config.js";
 import { appPorts, createContext, createEnvironment, stringValues } from "./context.js";
 import { abandonedTestProjects, createTestProjectName, projectName, testProjectLauncher, testProjectPrefix, } from "./names.js";
@@ -9,7 +10,9 @@ import { exitStatus, reapGroup, run, signalGroup, spawnCommand, } from "./proces
 import { readState, removeState, statePath, writeState } from "./state.js";
 import { createServing, tailnetHost } from "./tailnet.js";
 export function createProject(root, config) {
-    return { root, config, name: projectName(config.name, root) };
+    // The real path: it is what the stack is named after, and kept in its state.
+    const real = realpathSync(root);
+    return { root: real, config, name: projectName(config.name, real) };
 }
 const stopSignals = ["SIGINT", "SIGTERM", "SIGHUP"];
 function devTarget({ root, config, name }, composeEnv) {
@@ -62,12 +65,23 @@ export async function up(project) {
     const started = await startStack(project, earlier);
     const reservations = await reserveAppPorts(project.config.apps ?? {}, earlier?.apps);
     await reservations.releaseAll();
+    // Ports the stack already has stay, free or not: a `dev` running in
+    // another terminal is what holds them, and its URLs must not change
+    // under it. For the same reason its tailnet name stays.
+    const apps = {};
+    for (const [app, { ports }] of Object.entries(reservations.apps)) {
+        const held = earlier?.apps[app]?.ports ?? {};
+        apps[app] = {
+            ports: Object.fromEntries(Object.entries(ports).map(([name, port]) => [name, held[name] ?? port])),
+        };
+    }
     await writeState({
         version: 1,
         root: project.root,
         project: project.name,
         ...started,
-        apps: reservations.apps,
+        apps,
+        ...(earlier?.tailnet ? { tailnet: earlier.tailnet } : {}),
     });
     console.log(`State: ${statePath(project.name)}`);
 }
@@ -91,7 +105,16 @@ export async function dev(project, options) {
             ...(tailnet ? { tailnet } : {}),
         };
         await writeState(state);
-        await runApps(config, state, reservations);
+        try {
+            await runApps(config, state, reservations);
+        }
+        finally {
+            // Nothing is served any more: the URLs are local ones again.
+            if (tailnet) {
+                const { tailnet: _served, ...local } = state;
+                await writeState(local);
+            }
+        }
     }
     finally {
         await reservations.releaseAll();
@@ -251,6 +274,7 @@ export async function down(project, removeVolumes) {
         ...(removeVolumes ? ["--volumes", "--rmi", "local"] : []),
     ]);
     if (removeVolumes) {
+        await removeVolumesOf(project.root, project.name);
         await removeState(project.name);
         return;
     }
@@ -426,7 +450,7 @@ export async function test(project, args) {
         await reapGroup(child.pid);
         // A signal during the teardown has nothing left to stop.
         tests = undefined;
-        result = exitStatus(exit);
+        result = exitStatus(interrupted ? { code: null, signal: interrupted } : exit);
     }
     catch (error) {
         if (interrupted)

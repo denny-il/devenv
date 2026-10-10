@@ -1,3 +1,5 @@
+/** What tells a checkout's stacks from every other's: a digest of its real path. */
+export declare function checkoutIdentity(realRoot: string): string;
 /** The Compose project of the checkout at `root`, so worktrees run side by side. */
 export declare function projectName(name: string, root: string): string;
 /** The prefix of this worktree's test projects, never a dev project's. */

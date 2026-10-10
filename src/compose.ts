@@ -150,6 +150,27 @@ export async function startServices(target: ComposeTarget, init: string[]): Prom
   return published;
 }
 
+/**
+ * Removes every volume of `project`. `down --volumes` removes those of the
+ * Compose files as they are now, not one of a service since deleted from
+ * them, which would come back with its data if the service did.
+ */
+export async function removeVolumesOf(cwd: string, project: string): Promise<void> {
+  const { stdout } = await run(
+    [
+      "docker",
+      "volume",
+      "ls",
+      "--quiet",
+      "--filter",
+      `label=com.docker.compose.project=${project}`,
+    ],
+    { cwd, capture: true },
+  );
+  const volumes = stdout.split("\n").filter((line) => line.trim());
+  if (volumes.length) await run(["docker", "volume", "rm", ...volumes], { cwd, capture: true });
+}
+
 /** Every Compose project that has a container, network or volume. */
 export async function composeProjects(cwd: string): Promise<string[]> {
   const label = "com.docker.compose.project";

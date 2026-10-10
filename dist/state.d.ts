@@ -2,7 +2,7 @@ import type { Services } from "./compose.ts";
 /** What a worktree's stack is made of, kept between commands. */
 export interface State {
     version: 1;
-    /** The checkout the stack belongs to. A stack whose checkout is gone is an orphan. */
+    /** The real path of the stack's checkout. A stack whose checkout is gone is an orphan. */
     root: string;
     project: string;
     /** `compose.env` as the stack's volumes were created with. */

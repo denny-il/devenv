@@ -41,7 +41,8 @@ export interface ComposeConfig {
   /**
    * Variables for the Compose files. A stack keeps the values its volumes
    * were created with until `reset`, so a login a database was initialized
-   * with cannot change under it.
+   * with cannot change under it. One left `undefined` here is not unset: it
+   * stays as the environment has it.
    */
   env?: EnvValues;
 }

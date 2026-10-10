@@ -2,11 +2,12 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promise
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
 import type { Services } from "./compose.ts";
+import { checkoutIdentity } from "./names.ts";
 
 /** What a worktree's stack is made of, kept between commands. */
 export interface State {
   version: 1;
-  /** The checkout the stack belongs to. A stack whose checkout is gone is an orphan. */
+  /** The real path of the stack's checkout. A stack whose checkout is gone is an orphan. */
   root: string;
   project: string;
   /** `compose.env` as the stack's volumes were created with. */
@@ -72,6 +73,10 @@ export function parseState(content: string, project: string): State {
     throw new Error("not the state of the stack it is filed under");
   if (typeof value.root !== "string" || !isAbsolute(value.root))
     throw new Error("it names no checkout");
+  // A stack's name is made from its checkout's path, so a path that does
+  // not make this name is not where the stack came from.
+  if (!project.endsWith(`-local-${checkoutIdentity(value.root)}`))
+    throw new Error("it names another checkout than its stack's");
 
   const composeEnv: Record<string, string> = {};
   for (const [key, item] of Object.entries(value.composeEnv)) {

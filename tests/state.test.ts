@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterAll, expect, test } from "vitest";
+import { checkoutIdentity } from "../src/names.ts";
 import { orphans } from "../src/stacks.ts";
 import {
   type State,
@@ -21,7 +22,7 @@ afterAll(() => rmSync(home, { recursive: true, force: true }));
 const written: State = {
   version: 1,
   root: "/project",
-  project: "app-local-0123456789ab",
+  project: `app-local-${checkoutIdentity("/project")}`,
   composeEnv: { POSTGRES_USER: "app" },
   services: { postgres: { ports: { 5432: 32818 } } },
   apps: { web: { ports: { http: 4200 } } },
@@ -58,15 +59,20 @@ test("a state speaks only for the stack it is filed under, and names its checkou
   // No checkout to look for would read as a checkout that is gone.
   for (const root of [undefined, null, "", "relative/path"])
     expect(() => parse({ ...written, root })).toThrow("names no checkout");
+  // A path that does not make the stack's name is not its checkout: taken
+  // for one, a path that does not exist would have `prune` remove the stack.
+  expect(() => parse({ ...written, root: "/somewhere/else" })).toThrow("another checkout");
 });
 
 test("every stack's state is kept in one place outside the checkouts", async () => {
   expect(stateHome()).toBe(resolve(home, "devenv"));
-  expect(statePath(written.project)).toBe(
-    resolve(home, "devenv/stacks/app-local-0123456789ab.json"),
-  );
+  expect(statePath(written.project)).toBe(resolve(home, `devenv/stacks/${written.project}.json`));
 
-  const other = { ...written, project: "app-local-ffffffffffff", root: "/elsewhere" };
+  const other = {
+    ...written,
+    project: `app-local-${checkoutIdentity("/elsewhere")}`,
+    root: "/elsewhere",
+  };
   await writeState(written);
   await writeState(other);
   // What is not a state, or is another stack's, does not hide the ones that are.
@@ -74,7 +80,8 @@ test("every stack's state is kept in one place outside the checkouts", async () 
   writeFileSync(resolve(home, "devenv/stacks/app-local-aaaaaaaaaaaa.json"), JSON.stringify(other));
 
   expect(await readState(written.project)).toEqual(written);
-  expect(await listStates()).toEqual([written, other]);
+  const byName = (a: State, b: State) => (a.project < b.project ? -1 : 1);
+  expect(await listStates()).toEqual([written, other].toSorted(byName));
 
   await removeState(other.project);
   expect(await readState(other.project)).toBeNull();

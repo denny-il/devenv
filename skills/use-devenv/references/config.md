@@ -76,7 +76,8 @@ A command is a line for the shell (`"pnpm database migrate"`), or a list of a
 program and its arguments, which runs without a shell.
 
 An environment value may be a string or a number. A value of `undefined`
-unsets the variable, even if the root `.env` sets it.
+unsets the variable, even if the root `.env` sets it. `compose.env` is the
+exception: there it leaves the variable as the environment has it.
 
 ## Apps and ports
 

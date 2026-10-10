@@ -12,7 +12,9 @@ locally. The apps keep listening on `127.0.0.1`; Tailscale forwards to them.
   cookies and baked-in API URLs.
 - Serving starts before `setup` and the apps, so a missing permission or a
   port already served fails at once.
-- The entries exist only while `dev` runs. Nothing is left to clean up.
+- The entries exist only while `dev` runs. Nothing is left to clean up,
+  unless the launcher is killed outright (`kill -9`): then its apps and its
+  `tailscale serve` processes keep running until they are stopped by hand.
 - The first request to a name can take about half a minute, while its
   certificate is issued.
 - Until an app has started, its URL answers 502.
@@ -47,7 +49,8 @@ so run it again until every line is checked.
 - On Linux, the user allowed to serve:
   `sudo tailscale set --operator=$USER`
 
-`devenv tailnet info` reports which of these is missing.
+`devenv tailnet info` reports whether certificates are on. A missing operator
+permission shows only when serving is tried, or in `devenv setup tailscale`.
 
 ## Failure messages
 
