@@ -12,7 +12,14 @@ Linux and macOS, Node 22.18 or newer, Docker Compose 2.24.4 or newer.
 ## Install
 
 ```sh
-pnpm add -D git+ssh://git@github.com/denny-il/devenv.git
+pnpm add -D github:denny-il/devenv
+```
+
+pnpm resolves GitHub repositories over HTTPS. While this one is private, let
+Git reach GitHub over SSH instead, once per machine:
+
+```sh
+git config --global url."git@github.com:".insteadOf "https://github.com/"
 ```
 
 ```jsonc
