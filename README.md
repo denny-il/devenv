@@ -102,7 +102,6 @@ on a machine with the Git rule above, or with HTTPS credentials for GitHub.
 | `devenv list`                       | Shows every stack on this machine.                                              |
 | `devenv prune`                      | Removes the stacks whose checkout is gone, with their data.                     |
 | `devenv setup [docker] [tailscale]` | Installs Docker and Tailscale on this machine, and sets them up.                |
-| `devenv setup codex`                | Has the Codex app remove a worktree's stack when it deletes the worktree.       |
 | `devenv tailnet info`               | Shows this machine's tailnet name and what keeps it from serving, if anything.  |
 | `devenv tailnet serve`              | Serves the given local ports to the tailnet until stopped, without any project. |
 
@@ -248,7 +247,7 @@ Once per tailnet and machine:
 - On Linux, allow your user to serve: `sudo tailscale set --operator=$USER`.
 
 The first request to a new name can take half a minute while its certificate
-is issued. The entries disappear with the launcher; nothing here ever runs
+is issued. The entries disappear when the launcher stops; nothing here ever runs
 `tailscale serve reset`, which would wipe every project's entries.
 
 Everyone who can reach this machine on the tailnet reaches the stack. For a
@@ -266,19 +265,6 @@ volumes stay in Docker with nothing left to manage them.
 data. A checkout that was moved, or sits on a disk that is not mounted, looks
 the same as a deleted one, so read the list before agreeing. Without a
 terminal it removes nothing unless given `--yes`.
-
-## Worktrees the Codex app manages
-
-The Codex desktop app deletes a chat's worktree when the chat is archived, and
-when it trims old worktrees. `devenv setup codex`, run in the project, has it
-remove the worktree's stack first. It adds a cleanup script to the project's
-local environment in `.codex/environments/`, creating one if there is none.
-
-- Commit the file, and pick that environment when starting a worktree chat.
-  The app runs the cleanup only for worktrees created with it.
-- The script never fails, since a failing one would keep the app from deleting
-  the worktree. A stack it could not remove is left for `devenv prune`.
-- Only the desktop app runs these scripts. The Codex CLI does not.
 
 ## Under a sandbox
 

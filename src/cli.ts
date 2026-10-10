@@ -25,8 +25,6 @@ Commands:
   setup [docker] [tailscale]
                            Install and set up Docker and Tailscale on this
                            machine; both unless one is named
-  setup codex              Have the Codex app remove a worktree's stack when
-                           it deletes the worktree
   tailnet info [--json]    Show this machine's tailnet name and what keeps it
                            from serving, if anything
   tailnet serve <port>...  Serve https://<machine>:<port> from
@@ -88,10 +86,7 @@ export async function main(argv: string[]): Promise<void> {
       await prune({ yes: args.length === 1 });
       break;
     case "setup":
-      await setup(args, async () => {
-        const { root, config } = await loadProject();
-        return { root, name: config.name };
-      });
+      await setup(args);
       break;
     case "tailnet": {
       const [subcommand, ...rest] = args;

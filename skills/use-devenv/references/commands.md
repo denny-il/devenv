@@ -4,23 +4,22 @@ All commands find `devenv.config.ts` (or `.js`) in the current directory or
 any directory above it; that directory is the project root. The root `.env` is
 loaded first, and variables already set in the environment win over it.
 
-`list`, `prune`, `tailnet` and `setup` need no project, except `setup codex`.
+`list`, `prune`, `setup` and `tailnet` need no project.
 
-| Command                             | What it does                                                                                                                        |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `devenv up`                         | Starts the services and assigns the app ports.                                                                                      |
-| `devenv dev [--tailscale]`          | Starts the services, runs `setup`, runs every app until one stops.                                                                  |
-| `devenv status`                     | Lists the containers, the app URLs and the project's `info` lines.                                                                  |
-| `devenv run -- <command>`           | Runs a command with the stack's environment.                                                                                        |
-| `devenv test [-- <args>]`           | Runs the tests on a fresh stack that is always removed.                                                                             |
-| `devenv down`                       | Stops the services; keeps volumes, credentials and app ports.                                                                       |
-| `devenv reset`                      | Removes containers, volumes, locally built images and the state.                                                                    |
-| `devenv list`                       | Shows every stack on this machine.                                                                                                  |
-| `devenv prune [--yes]`              | Removes the stacks whose checkout is gone, with their data.                                                                         |
-| `devenv setup [docker] [tailscale]` | Installs and sets up Docker and Tailscale on this machine; both unless one is named.                                                |
-| `devenv setup codex`                | Adds a cleanup script to the project's Codex environment, so the Codex app removes a worktree's stack when it deletes the worktree. |
-| `devenv tailnet info [--json]`      | Prints this machine's tailnet name and what keeps it from serving.                                                                  |
-| `devenv tailnet serve <port>…`      | Serves local ports to the tailnet over HTTPS until stopped.                                                                         |
+| Command                             | What it does                                                                         |
+| ----------------------------------- | ------------------------------------------------------------------------------------ |
+| `devenv up`                         | Starts the services and assigns the app ports.                                       |
+| `devenv dev [--tailscale]`          | Starts the services, runs `setup`, runs every app until one stops.                   |
+| `devenv status`                     | Lists the containers, the app URLs and the project's `info` lines.                   |
+| `devenv run -- <command>`           | Runs a command with the stack's environment.                                         |
+| `devenv test [-- <args>]`           | Runs the tests on a fresh stack that is always removed.                              |
+| `devenv down`                       | Stops the services; keeps volumes, credentials and app ports.                        |
+| `devenv reset`                      | Removes containers, volumes, locally built images and the state.                     |
+| `devenv list`                       | Shows every stack on this machine.                                                   |
+| `devenv prune [--yes]`              | Removes the stacks whose checkout is gone, with their data.                          |
+| `devenv setup [docker] [tailscale]` | Installs and sets up Docker and Tailscale on this machine; both unless one is named. |
+| `devenv tailnet info [--json]`      | Prints this machine's tailnet name and what keeps it from serving.                   |
+| `devenv tailnet serve <port>…`      | Serves local ports to the tailnet over HTTPS until stopped.                          |
 
 ## How a stack starts
 

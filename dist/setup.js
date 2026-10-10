@@ -1,5 +1,4 @@
 import { userInfo } from "node:os";
-import { setupCodex } from "./codex.js";
 import { composeVersionMinimum, supportsComposeVersion } from "./compose.js";
 import { describeCommand, run } from "./process.js";
 import { certificatesOff, inspect } from "./tailnet.js";
@@ -142,25 +141,23 @@ export async function meet(requirements, runFix) {
     }
     return true;
 }
-const machine = ["docker", "tailscale"];
-const targets = [...machine, "codex"];
+const targets = ["docker", "tailscale"];
 /**
- * `devenv setup [docker] [tailscale] [codex]`: installs and sets up what
- * stacks need on this machine, Docker and Tailscale unless told which.
- * `codex` sets up the project it is run in, so only when named.
+ * `devenv setup [docker] [tailscale]`: installs and sets up what stacks need
+ * on this machine; all of it unless told which.
  */
-export async function setup(wanted, project) {
+export async function setup(wanted) {
     const { platform } = process;
     if (platform !== "linux" && platform !== "darwin")
         throw new Error("`devenv setup` knows Linux and macOS only");
-    const unknown = wanted.filter((target) => !targets.includes(target));
+    const unknown = wanted.filter((target) => !targets.some((known) => known === target));
     if (unknown.length)
-        throw new Error(`\`devenv setup\` knows ${targets.join(", ")}, not ${unknown.join(", ")}`);
+        throw new Error(`\`devenv setup\` knows ${targets.join(" and ")}, not ${unknown.join(", ")}`);
     const user = userInfo().username;
     // A command that fails shows in the requirement staying unmet.
     const runFix = (command) => run(command, { cwd, reject: false });
     let met = true;
-    for (const target of machine) {
+    for (const target of targets) {
         if (wanted.length && !wanted.includes(target))
             continue;
         const requirements = target === "docker"
@@ -171,8 +168,4 @@ export async function setup(wanted, project) {
     }
     if (!met)
         process.exitCode = 1;
-    if (wanted.includes("codex")) {
-        const { root, name } = await project();
-        await setupCodex(root, name);
-    }
 }
