@@ -3,8 +3,9 @@
 // `http://127.0.0.1:<port>`, so the servers keep listening on this machine
 // only.
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
+import { signalGroup } from "./process.ts";
 
 /** Runs the Tailscale CLI to its end. */
 function tailscale(args: string[]): Promise<string> {
@@ -90,7 +91,8 @@ function serveFailure(port: number, output: string, what = "stopped serving"): s
 }
 
 interface PortServing {
-  child: ChildProcess;
+  /** Signals it while it lasts. */
+  signal(signal: NodeJS.Signals): void;
   ready: Promise<void>;
   closed: Promise<void>;
   passing(): boolean;
@@ -107,22 +109,33 @@ function servePort(host: string, port: number): PortServing {
     "tailscale",
     ["serve", `--https=${port}`, `http://127.0.0.1:${port}`],
     // A group of its own: a terminal's Ctrl-C must not end it before
-    // whoever serves has decided to stop.
+    // whoever serves has decided to stop. It is ended as a group too: the
+    // Tailscale macOS app's CLI is a script that runs the real program as
+    // its child, and a signal to the script alone leaves that one serving.
     { stdio: ["ignore", "pipe", "pipe"], detached: true },
   );
   let output = "";
   let overdue = false;
+  let ended = false;
   const closed = new Promise<void>((resolveClosed) => {
-    child.on("close", () => resolveClosed());
-    child.on("error", () => resolveClosed());
+    const end = () => {
+      ended = true;
+      resolveClosed();
+    };
+    child.on("close", end);
+    child.on("error", end);
   });
+  // Once it has ended, its group's number may be another group's.
+  const signal = (name: NodeJS.Signals) => {
+    if (!ended) signalGroup(child.pid, name);
+  };
   const ready = new Promise<void>((resolveReady, rejectReady) => {
     // One that neither serves nor ends, waiting for an approval in a browser
     // say, would hold the start forever.
     const timer = setTimeout(() => {
       overdue = true;
       rejectReady(new Error(serveFailure(port, output, "did not start serving")));
-      child.kill();
+      signal("SIGTERM");
     }, startTimeout);
     const read = (chunk: string) => {
       output += chunk;
@@ -141,7 +154,7 @@ function servePort(host: string, port: number): PortServing {
   // Whoever needs the failure awaits `ready` or reads `failure()`.
   ready.catch(() => {});
   return {
-    child,
+    signal,
     ready,
     closed,
     passing: () => !overdue && !lasting.test(output),
@@ -187,11 +200,11 @@ export function createServing(host: string): Serving {
       if (stopped) return;
       stopped = true;
       const all = starting ? [...servings, starting] : servings;
-      for (const { child } of all) child.kill();
+      for (const serving of all) serving.signal("SIGTERM");
       // One that does not end when asked would keep its entry, and whoever
       // waits for it waiting.
       setTimeout(() => {
-        for (const { child } of all) child.kill("SIGKILL");
+        for (const serving of all) serving.signal("SIGKILL");
       }, 5_000).unref();
     },
     closed() {
