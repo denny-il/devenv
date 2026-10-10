@@ -1,8 +1,6 @@
 import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process";
 import { constants } from "node:os";
-
-/** A program with its arguments, or a line for the shell. */
-export type Command = string | readonly string[];
+import type { Command } from "./config.ts";
 
 export interface RunOptions {
   cwd: string;

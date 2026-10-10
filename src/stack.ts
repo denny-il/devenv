@@ -10,7 +10,7 @@ import {
   removeVolumesOf,
   startServices,
 } from "./compose.ts";
-import { type Config, type Context, defaultPorts } from "./config.ts";
+import { type Command, type Config, type Context, defaultPorts } from "./config.ts";
 import { appPorts, createContext, createEnvironment, stringValues } from "./context.ts";
 import {
   abandonedTestProjects,
@@ -20,15 +20,7 @@ import {
   testProjectPrefix,
 } from "./names.ts";
 import { type AppReservations, reserveAppPorts } from "./ports.ts";
-import {
-  type Command,
-  type Exit,
-  exitStatus,
-  reapGroup,
-  run,
-  signalGroup,
-  spawnCommand,
-} from "./process.ts";
+import { type Exit, exitStatus, reapGroup, run, signalGroup, spawnCommand } from "./process.ts";
 import { type State, readState, removeState, statePath, writeState } from "./state.ts";
 import { createServing, tailnetHost } from "./tailnet.ts";
 

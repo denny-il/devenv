@@ -1,5 +1,6 @@
 export {
   type AppConfig,
+  type Command,
   type ComposeConfig,
   type Config,
   type Context,
@@ -8,4 +9,3 @@ export {
   type TestConfig,
   defineConfig,
 } from "./config.ts";
-export type { Command } from "./process.ts";

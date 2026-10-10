@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { Command } from "./process.ts";
+
+/** A program with its arguments, or a line for the shell. */
+export type Command = string | readonly string[];
 
 /** Environment variables; one left `undefined` is unset. */
 export type EnvValues = Record<string, string | number | undefined>;

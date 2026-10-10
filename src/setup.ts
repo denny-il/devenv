@@ -1,6 +1,7 @@
 import { userInfo } from "node:os";
 import { composeVersionMinimum, supportsComposeVersion } from "./compose.ts";
-import { type Command, describeCommand, run } from "./process.ts";
+import type { Command } from "./config.ts";
+import { describeCommand, run } from "./process.ts";
 import { certificatesOff, inspect } from "./tailnet.ts";
 
 /** Something this machine needs before a stack can run on it. */
