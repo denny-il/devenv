@@ -30,7 +30,9 @@ is what has to be true of the project, then the steps to get there.
 - Variables come from `compose.env`: write `${POSTGRES_USER}` in the file and
   give the value in the config, so there is one place that knows it.
 - The test overlay should keep nothing: `tmpfs` for data directories, and
-  `volumes: !reset []` to drop the base file's named volumes.
+  `volumes: !reset []` to drop the base file's named volumes. Images it
+  builds are removed with each run. Variables only it reads go in
+  `test.compose.env`.
 - A top-level `name:` is ignored; the launcher names the project.
 
 **Apps**

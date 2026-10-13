@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import { compose, ensureDocker } from "./compose.ts";
+import { ensureDocker, removeProject } from "./compose.ts";
+import { testProjectPrefixOf } from "./names.ts";
 import { run } from "./process.ts";
+import { removeAbandonedTestStacks } from "./stack.ts";
 import { type State, listStates, removeState, stateHome } from "./state.ts";
 
 /** The stacks whose checkout is gone: nothing can start, stop or reset them any more. */
@@ -73,11 +75,10 @@ export async function prune(options: { yes: boolean }): Promise<void> {
       continue;
     }
     // By name alone: the Compose files went with the checkout.
-    await compose({ root: process.cwd(), project, files: [], env: process.env }, [
-      "down",
-      "--volumes",
-      "--remove-orphans",
-    ]);
+    await removeProject(project);
+    // What its killed test runs left, which only a `devenv test` in the
+    // checkout would have found.
+    await removeAbandonedTestStacks(process.cwd(), testProjectPrefixOf(project));
     await removeState(project);
     console.log(`Removed ${project}`);
   }

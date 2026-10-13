@@ -6,6 +6,7 @@ import {
   projectName,
   testProjectLauncher,
   testProjectPrefix,
+  testProjectPrefixOf,
 } from "../src/names.ts";
 
 test("a checkout names its own projects", () => {
@@ -15,10 +16,18 @@ test("a checkout names its own projects", () => {
   expect(testProjectPrefix("app", tmpdir())).toMatch(/^app-test-[0-9a-f]{12}-$/);
 });
 
+test("a dev project names its checkout's test projects once the checkout is gone", () => {
+  expect(testProjectPrefixOf(projectName("my-local-app", tmpdir()))).toBe(
+    testProjectPrefix("my-local-app", tmpdir()),
+  );
+});
+
 test("a test project names the launcher that started it", () => {
   const prefix = "app-test-0123456789ab-";
   expect(testProjectLauncher(createTestProjectName(prefix, 4321, "a1b2c3"), prefix)).toBe(4321);
   expect(testProjectLauncher(`${prefix}nonsense`, prefix)).toBeUndefined();
+  // Another project, whose own name starts as this checkout's test projects do.
+  expect(testProjectLauncher(`${prefix}4321-a1b2c3-local-ffffffffffff`, prefix)).toBeUndefined();
 });
 
 test("only this worktree's test projects without a live launcher are abandoned", () => {
@@ -28,11 +37,11 @@ test("only this worktree's test projects without a live launcher are abandoned",
     `${prefix}100-aaaaaa`,
     `${prefix}200-bbbbbb`,
     `${prefix}nonsense`,
+    `${prefix}300-dddddd-local-ffffffffffff`,
     "app-test-ffffffffffff-100-cccccc",
     "app-local-0123456789ab",
   ];
   expect(abandonedTestProjects(projects, prefix, (pid) => pid === 200)).toEqual([
     `${prefix}100-aaaaaa`,
-    `${prefix}nonsense`,
   ]);
 });

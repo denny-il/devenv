@@ -1,4 +1,7 @@
+import { mkdtemp, rm } from "node:fs/promises";
 import { connect } from "node:net";
+import { tmpdir } from "node:os";
+import { resolve } from "node:path";
 import { type RunOptions, type RunResult, run } from "./process.ts";
 
 // `!reset` in an overlay, which a test overlay drops named volumes with.
@@ -73,6 +76,32 @@ export function compose(
     ],
     { ...options, cwd: root, env, ...(signal ? { signal } : {}) },
   );
+}
+
+/**
+ * `down` with all a project has. `local` images are those Compose built for
+ * the project, under whatever name, and it finds them, like the rest, by the
+ * project's label: this works on a project whose Compose files are gone.
+ */
+export const removal = ["down", "--remove-orphans", "--volumes", "--rmi", "local"];
+
+/**
+ * Removes all of `project` by its name alone: its Compose files may be gone,
+ * or no longer what it was started from. From an empty directory and without
+ * the variables that name files, as a project's `.env` may: with no file
+ * named Compose reads one it finds where it runs, or is pointed at.
+ */
+export async function removeProject(
+  project: string,
+  options: Pick<RunOptions, "detached"> = {},
+): Promise<void> {
+  const empty = await mkdtemp(resolve(tmpdir(), "devenv-"));
+  const { COMPOSE_FILE: _files, COMPOSE_ENV_FILES: _envFiles, ...env } = process.env;
+  try {
+    await compose({ root: empty, project, files: [], env }, removal, options);
+  } finally {
+    await rm(empty, { recursive: true, force: true });
+  }
 }
 
 /** The published ports in the output of `compose ps --format json`. */
@@ -171,7 +200,7 @@ export async function removeVolumesOf(cwd: string, project: string): Promise<voi
   if (volumes.length) await run(["docker", "volume", "rm", ...volumes], { cwd, capture: true });
 }
 
-/** Every Compose project that has a container, network or volume. */
+/** Every Compose project that has a container, network, volume or built image. */
 export async function composeProjects(cwd: string): Promise<string[]> {
   const label = "com.docker.compose.project";
   const listings = await Promise.all(
@@ -186,5 +215,27 @@ export async function composeProjects(cwd: string): Promise<string[]> {
       ),
     ),
   );
-  return listings.flatMap(({ stdout }) => stdout.split("\n").filter((line) => line.trim()));
+  const lines = ({ stdout }: RunResult) => stdout.split("\n").filter((line) => line.trim());
+  // An image is listed without its labels, so each is asked for its own. One
+  // removed meanwhile, by a test run ending, fails that without mattering.
+  const images = lines(
+    await run(["docker", "image", "ls", "--quiet", "--filter", `label=${label}`], {
+      cwd,
+      capture: true,
+    }),
+  );
+  const built = images.length
+    ? await run(
+        [
+          "docker",
+          "image",
+          "inspect",
+          "--format",
+          `{{index .Config.Labels "${label}"}}`,
+          ...new Set(images),
+        ],
+        { cwd, capture: true, reject: false },
+      )
+    : undefined;
+  return [...listings, ...(built ? [built] : [])].flatMap(lines);
 }

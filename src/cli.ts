@@ -1,6 +1,5 @@
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { findConfig, loadConfig } from "./config.ts";
+import { dirname } from "node:path";
+import { findConfig, findEnvFile, loadConfig } from "./config.ts";
 import { type Project, createProject, dev, down, runCommand, status, test, up } from "./stack.ts";
 import { setup } from "./setup.ts";
 import { list, prune } from "./stacks.ts";
@@ -19,6 +18,7 @@ Commands:
                            always removed
   down                     Stop services and keep their volumes
   reset                    Stop services and delete this worktree's volumes
+                           and the images built for it
   list                     Show every stack on this machine
   prune [--yes]            Remove the stacks whose checkout is gone, with
                            their data
@@ -34,8 +34,13 @@ async function loadProject(): Promise<Project> {
   const path = findConfig(process.cwd());
   const root = dirname(path);
   // Before the config, which may read it. Variables already set win.
-  const envFile = resolve(root, ".env");
-  if (existsSync(envFile)) process.loadEnvFile(envFile);
+  const envFile = await findEnvFile(root);
+  if (envFile) {
+    // On stderr: under `run` the standard output is the command's alone.
+    if (dirname(envFile) !== root)
+      console.error(`Environment: ${envFile}, as this worktree has no .env of its own`);
+    process.loadEnvFile(envFile);
+  }
   return createProject(root, await loadConfig(path));
 }
 
