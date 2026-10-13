@@ -1,6 +1,7 @@
-import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { run } from "./process.ts";
 
 /** A program with its arguments, or a line for the shell. */
 export type Command = string | readonly string[];
@@ -56,6 +57,14 @@ export interface TestConfig {
   command: Command | ((args: string[]) => Command);
   /** On top of the project's `env`. */
   env?: EnvValues;
+  compose?: {
+    /**
+     * Variables for the Compose files of the test stack alone, on top of
+     * `compose.env`: a `dev` stack neither gets them nor counts them among
+     * what it was created with.
+     */
+    env?: EnvValues;
+  };
 }
 
 export interface Config {
@@ -64,7 +73,10 @@ export interface Config {
   compose: ComposeConfig;
   /** Started by `dev` in this order. */
   apps?: Record<string, AppConfig>;
-  /** The environment of every app and command, on top of the root `.env`. */
+  /**
+   * The environment of every app and command, on top of the root `.env`, or
+   * the main checkout's in a git worktree that has none.
+   */
   env?: (context: Context) => EnvValues;
   /** Run by `dev` once the services are up, before the apps start. */
   setup?: Command[];
@@ -79,7 +91,7 @@ export interface Context {
   root: string;
   /** The stack's Compose project: one per worktree, and per run for tests. */
   project: string;
-  /** `compose.env` as the stack uses it. */
+  /** `compose.env` as the stack uses it, under `test.compose.env` for tests. */
   vars: Readonly<Record<string, string>>;
   /** This machine's tailnet name while the apps are served over Tailscale. */
   tailnet: string | undefined;
@@ -108,6 +120,39 @@ export function findConfig(directory: string): string {
     }
     if (current === dirname(current))
       throw new Error(`No ${configNames.join(" or ")} in ${resolve(directory)} or above it`);
+  }
+}
+
+/**
+ * The `.env` of the project at `root`: its own, or, in a linked git worktree
+ * that has none, the one at the same place in the main checkout. `.env` is
+ * not checked out, so a new worktree would otherwise start without the keys
+ * its apps need and fail far from the cause.
+ */
+export async function findEnvFile(root: string): Promise<string | undefined> {
+  const own = resolve(root, ".env");
+  if (existsSync(own)) return own;
+  // The repository `root` is in, wherever a hook or a wrapper points git.
+  const env = { ...process.env };
+  for (const name of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"]) delete env[name];
+  const git = (...args: string[]) => run(["git", ...args], { cwd: root, env, capture: true });
+  try {
+    const [toplevel, worktrees] = await Promise.all([
+      git("rev-parse", "--show-toplevel"),
+      git("worktree", "list", "--porcelain", "-z"),
+    ]);
+    // The main checkout is listed first, a NUL after each of its lines. A
+    // bare repository is listed there too, and is no checkout.
+    const [path = "", ...attributes] = (worktrees.stdout.split("\0\0")[0] ?? "").split("\0");
+    if (!path.startsWith("worktree ") || attributes.includes("bare")) return undefined;
+    const main = realpathSync(path.slice("worktree ".length));
+    const here = realpathSync(toplevel.stdout.replace(/\n$/, ""));
+    if (main === here) return undefined;
+    const inMain = resolve(main, relative(here, realpathSync(root)), ".env");
+    return existsSync(inMain) ? inMain : undefined;
+  } catch {
+    // No git, or one before 2.36, no repository, or no main checkout left.
+    return undefined;
   }
 }
 

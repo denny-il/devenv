@@ -96,7 +96,8 @@ A project adapts to the launcher, not the other way around.
 - **Apps.** Each is a command that takes its ports from its environment and
   listens on `127.0.0.1`.
 - **Environment.** One function from the stack to the variables every app and
-  command gets, on top of the root `.env`.
+  command gets, on top of the root `.env`. A git worktree without a `.env`
+  gets the main checkout's.
 
 ## Config
 
@@ -160,6 +161,8 @@ export default defineConfig({
     // Arguments after `devenv test --` are added; a function decides itself.
     command: "vitest --run",
     env: { DATABASE_TESTS: "true" },
+    // Compose variables of the test stack alone, over `compose.env`.
+    compose: { env: { POSTGRES_PASSWORD: "test" } },
   },
 
   // Printed under the URLs by `dev` and `status`.
@@ -176,7 +179,7 @@ The functions get the stack as a context:
 | `service(name).port(target)` | The loopback port Docker published a service's port on.            |
 | `port(ref)`                  | An app's port: `'api.proxy'`, or `'web'` for an app with one port. |
 | `url(ref)`                   | The origin that port answers at.                                   |
-| `vars`                       | `compose.env` as the stack uses it.                                |
+| `vars`                       | The Compose variables as the stack uses them.                      |
 | `project`                    | The stack's Compose project name.                                  |
 | `root`                       | The project root.                                                  |
 | `tailnet`                    | This machine's tailnet name, under `dev --tailscale`.              |
@@ -194,8 +197,11 @@ The functions get the stack as a context:
   has not stopped ten seconds later is killed. Any app stopping stops the
   stack.
 - **Tests.** Each run has a Compose project of its own, removed when the run
-  ends, on Ctrl-C too. A run that was killed outright is cleaned up by the
-  next one.
+  ends, on Ctrl-C too, with the images built for it. A run that was killed
+  outright is cleaned up by the next one, or by `reset`.
+- **`.env` in a worktree.** `.env` is not checked out, so a git worktree
+  starts without one. Until it has its own, the main checkout's is loaded,
+  and a line says so. An empty `.env` in the worktree turns that off.
 
 ## Tailscale
 
@@ -225,7 +231,7 @@ happens when a worktree is deleted without `devenv reset`: its containers and
 volumes stay in Docker with nothing left to manage them.
 
 `devenv prune` lists the orphans and, after a yes, removes them with their
-data. A checkout that was moved, or sits on a disk that is not mounted, looks
+data and built images. A checkout that was moved, or sits on a disk that is not mounted, looks
 the same as a deleted one, so read the list before agreeing. Without a
 terminal it removes nothing unless given `--yes`.
 

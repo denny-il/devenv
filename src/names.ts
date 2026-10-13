@@ -20,14 +20,23 @@ export function testProjectPrefix(name: string, root: string): string {
   return `${name}-test-${worktreeIdentity(root)}-`;
 }
 
+/** The same prefix from the checkout's dev project, for a checkout that is gone. */
+export function testProjectPrefixOf(devProject: string): string {
+  return devProject.replace(/-local-([0-9a-f]{12})$/, "-test-$1-");
+}
+
 /** A run's own project: the launcher's PID tells a live run from a killed one. */
 export function createTestProjectName(prefix: string, pid: number, runId: string): string {
   return `${prefix}${pid}-${runId}`;
 }
 
-/** The PID of the launcher that started a test project, if it names one. */
+/**
+ * The PID of the launcher that started a test project, if it is named as one
+ * is. Nothing else passes for a test project: another project's name may
+ * start with the prefix, and what is found here gets removed.
+ */
 export function testProjectLauncher(project: string, prefix: string): number | undefined {
-  const pid = Number(project.slice(prefix.length).split("-")[0]);
+  const pid = Number(/^(\d+)-[0-9a-f]{6}$/.exec(project.slice(prefix.length))?.[1]);
   return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
 }
 
@@ -43,6 +52,6 @@ export function abandonedTestProjects(
   return [...new Set(projects)].filter((project) => {
     if (!project.startsWith(prefix)) return false;
     const pid = testProjectLauncher(project, prefix);
-    return pid === undefined || !isRunning(pid);
+    return pid !== undefined && !isRunning(pid);
   });
 }

@@ -2,7 +2,8 @@
 
 `devenv.config.ts` (or `.js`) in the project root. It is plain TypeScript that
 Node runs as it is, so it may read `process.env`, which already includes the
-root `.env`, and compute anything.
+root `.env` (the main checkout's, in a git worktree that has none), and
+compute anything.
 
 ```ts
 import { defineConfig } from "@denny-il/devenv";
@@ -50,6 +51,7 @@ export default defineConfig({
     setup: ["pnpm database migrate"],
     command: "pnpm test",
     env: { DATABASE_TESTS: "true" },
+    compose: { env: { POSTGRES_PASSWORD: "test" } },
   },
 
   info: () => ({ "Sign-in": "admin@shop.local / admin" }),
@@ -58,26 +60,28 @@ export default defineConfig({
 
 ## Fields
 
-| Field           | Meaning                                                                          |
-| --------------- | -------------------------------------------------------------------------------- |
-| `name`          | Start of the Compose project names. Lowercase letters, digits, `-`, `_`.         |
-| `compose.files` | Compose files of every mode, relative to the root.                               |
-| `compose.dev`   | Overlays added for `up` and `dev`.                                               |
-| `compose.test`  | Overlays added for `test`.                                                       |
-| `compose.init`  | Services that do a job and exit. Each runs to its end once the others are ready. |
-| `compose.env`   | Variables for the Compose files (`${POSTGRES_USER}`).                            |
-| `apps`          | The host apps, started by `dev` in this order.                                   |
-| `env`           | A function from the stack to the variables every app and command gets.           |
-| `setup`         | Commands `dev` runs once the services are up, before the apps.                   |
-| `test`          | `setup` commands, the test `command`, and extra `env` for `devenv test`.         |
-| `info`          | A function returning lines to print under the URLs, such as a seeded sign-in.    |
+| Field              | Meaning                                                                          |
+| ------------------ | -------------------------------------------------------------------------------- |
+| `name`             | Start of the Compose project names. Lowercase letters, digits, `-`, `_`.         |
+| `compose.files`    | Compose files of every mode, relative to the root.                               |
+| `compose.dev`      | Overlays added for `up` and `dev`.                                               |
+| `compose.test`     | Overlays added for `test`.                                                       |
+| `compose.init`     | Services that do a job and exit. Each runs to its end once the others are ready. |
+| `compose.env`      | Variables for the Compose files (`${POSTGRES_USER}`).                            |
+| `apps`             | The host apps, started by `dev` in this order.                                   |
+| `env`              | A function from the stack to the variables every app and command gets.           |
+| `setup`            | Commands `dev` runs once the services are up, before the apps.                   |
+| `test`             | `setup` commands, the test `command`, and extra `env` for `devenv test`.         |
+| `test.compose.env` | Variables for the Compose files of the test stack alone, over `compose.env`.     |
+| `info`             | A function returning lines to print under the URLs, such as a seeded sign-in.    |
 
 A command is a line for the shell (`"pnpm database migrate"`), or a list of a
 program and its arguments, which runs without a shell.
 
 An environment value may be a string or a number. A value of `undefined`
-unsets the variable, even if the root `.env` sets it. `compose.env` is the
-exception: there it leaves the variable as the environment has it.
+unsets the variable, even if the root `.env` sets it. `compose.env` and
+`test.compose.env` are the exception: there it leaves the variable as the
+environment, or `compose.env`, has it.
 
 ## Apps and ports
 
@@ -102,7 +106,7 @@ exception: there it leaves the variable as the environment has it.
 | `service(name).port(target)` | The loopback port Docker published a service's port on.            |
 | `port(ref)`                  | An app's port: `"api.proxy"`, or `"web"` for an app with one port. |
 | `url(ref)`                   | The origin that port answers at.                                   |
-| `vars`                       | `compose.env` as the stack uses it.                                |
+| `vars`                       | The Compose variables as the stack uses them.                      |
 | `project`                    | The stack's Compose project name, unique per worktree.             |
 | `root`                       | The project root.                                                  |
 | `tailnet`                    | This machine's tailnet name under `dev --tailscale`, else unset.   |
@@ -122,6 +126,14 @@ exception: there it leaves the variable as the environment has it.
   volume keeps the login it was initialized with, so the launcher keeps using
   the original values and warns when the config's have changed. `devenv reset`
   applies new ones, with empty data.
+- **A variable only the test overlay reads belongs in `test.compose.env`.**
+  In `compose.env` it would change what the `dev` stack was created with and
+  set off that warning. Under `test`, `vars` holds both.
+- **A test stack's images do not outlive the run.** What Compose builds for a
+  test run is removed with it, so a service with `build:` and no `image:` is
+  built anew for each run and leaves nothing behind. One that also names an
+  `image:` is built only when that image is missing, unless it sets
+  `pull_policy: build`.
 - **`url()` and `port()` work without running apps.** `up` and `test` assign
   app ports too, so the URLs in `env` are valid values under `run` and `test`,
   even when nothing listens on them.

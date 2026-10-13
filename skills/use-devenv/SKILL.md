@@ -31,8 +31,8 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   fresh services of its own and removes them afterwards; the `dev` stack and
   its data are not touched.
 - **Stop with `devenv down`, which keeps the data.** `devenv reset` deletes
-  this worktree's volumes and state; run it before deleting a worktree, or its
-  containers and volumes are left behind.
+  this worktree's volumes, built images and state; run it before deleting a
+  worktree, or its containers, volumes and images are left behind.
 - **Leave Docker Compose to the launcher.** It names the Compose project per
   worktree. A `docker compose down --volumes` typed by hand can hit another
   worktree's data, and a plain `docker compose up` starts a second, unrelated

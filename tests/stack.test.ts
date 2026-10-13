@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { exitStatus } from "../src/process.ts";
-import { isTestLauncher, testCommand } from "../src/stack.ts";
+import { isTestLauncher, testCommand, testComposeEnv } from "../src/stack.ts";
 
 test("a test launcher is told from whatever else has its PID", () => {
   expect(isTestLauncher("node /project/node_modules/@denny-il/devenv/bin/devenv.js test\n")).toBe(
@@ -25,4 +25,17 @@ test("an exit reads as a shell would report it", () => {
   expect(exitStatus({ code: 3, signal: null })).toBe(3);
   expect(exitStatus({ code: null, signal: "SIGINT" })).toBe(130);
   expect(exitStatus({ code: null, signal: "SIGKILL" })).toBe(137);
+});
+
+test("a test stack's Compose variables go over the project's", () => {
+  expect(
+    testComposeEnv({
+      name: "app",
+      compose: { files: ["compose.yml"], env: { POSTGRES_USER: "app", POSTGRES_PORT: 5432 } },
+      test: {
+        command: "vitest",
+        compose: { env: { POSTGRES_USER: undefined, POSTGRES_PORT: 5433, IMAGE: "app-test" } },
+      },
+    }),
+  ).toEqual({ POSTGRES_USER: "app", POSTGRES_PORT: "5433", IMAGE: "app-test" });
 });

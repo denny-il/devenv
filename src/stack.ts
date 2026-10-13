@@ -7,6 +7,8 @@ import {
   compose,
   composeProjects,
   ensureDocker,
+  removal,
+  removeProject,
   removeVolumesOf,
   startServices,
 } from "./compose.ts";
@@ -54,6 +56,13 @@ function devTarget(
 /** The Compose variables of the worktree's stack: those it was created with. */
 function composeEnvOf(project: Project, state: State | null): Record<string, string> {
   return state?.composeEnv ?? stringValues(project.config.compose.env);
+}
+
+/** The Compose variables of a test stack: `test.compose.env` over `compose.env`. */
+export function testComposeEnv(config: Config): Record<string, string> {
+  // Each made strings first: one left `undefined` for tests must not unset
+  // what `compose.env` gives.
+  return { ...stringValues(config.compose.env), ...stringValues(config.test?.compose?.env) };
 }
 
 /** Starts the worktree's services, with the variables their volumes know. */
@@ -306,14 +315,19 @@ export async function down(project: Project, removeVolumes: boolean): Promise<vo
   const state = removeVolumes
     ? await readState(project.name).catch(() => null)
     : await readState(project.name);
-  await compose(devTarget(project, composeEnvOf(project, state)), [
-    "down",
-    "--remove-orphans",
-    ...(removeVolumes ? ["--volumes", "--rmi", "local"] : []),
-  ]);
+  await compose(
+    devTarget(project, composeEnvOf(project, state)),
+    removeVolumes ? removal : ["down", "--remove-orphans"],
+  );
   if (removeVolumes) {
     await removeVolumesOf(project.root, project.name);
     await removeState(project.name);
+    // Nothing of the worktree is left, which may be deleted next: only the
+    // next `devenv test` in it would find these.
+    await removeAbandonedTestStacks(
+      project.root,
+      testProjectPrefix(project.config.name, project.root),
+    );
     return;
   }
   // The kept volumes keep what they were created with, and the apps their
@@ -373,6 +387,32 @@ async function runningTestLaunchers(cwd: string, pids: number[]): Promise<Set<nu
   return running;
 }
 
+/**
+ * Removes the test stacks under `prefix` left by runs killed outright, which
+ * never reached their teardown, or what is left of one, such as an image. A
+ * run still going keeps its stack. By name alone: the Compose files may have
+ * changed since, and removing these must not wait on them being right.
+ */
+export async function removeAbandonedTestStacks(
+  cwd: string,
+  prefix: string,
+  options: { signal?: AbortSignal; detached?: boolean } = {},
+): Promise<void> {
+  const { signal, detached = false } = options;
+  const projects = await composeProjects(cwd);
+  const running = await runningTestLaunchers(
+    cwd,
+    projects.flatMap((stack) =>
+      stack.startsWith(prefix) ? (testProjectLauncher(stack, prefix) ?? []) : [],
+    ),
+  );
+  for (const leftover of abandonedTestProjects(projects, prefix, (pid) => running.has(pid))) {
+    signal?.throwIfAborted();
+    console.log(`Removing leftover test stack ${leftover}`);
+    await removeProject(leftover, { detached });
+  }
+}
+
 /** Whether a process's command line is this launcher running `test`. */
 export function isTestLauncher(commandLine: string): boolean {
   return /devenv(\.js)? test(\s|$)/.test(commandLine);
@@ -395,8 +435,9 @@ export function testCommand(
 /**
  * `devenv test`: runs the test command against a stack of its own, fresh
  * services under a project name for this run alone, on ports Docker assigns,
- * and always removed afterwards. The worktree's `dev` stack and its data are
- * never touched.
+ * and always removed afterwards, with the images built for it: a name per run
+ * would otherwise leave an image per run. The worktree's `dev` stack and its
+ * data are never touched.
  */
 export async function test(project: Project, args: string[]): Promise<void> {
   const { root, config } = project;
@@ -405,7 +446,7 @@ export async function test(project: Project, args: string[]): Promise<void> {
   await ensureDocker(root);
   const prefix = testProjectPrefix(config.name, root);
   const name = createTestProjectName(prefix, process.pid, randomBytes(3).toString("hex"));
-  const composeEnv = stringValues(config.compose.env);
+  const composeEnv = testComposeEnv(config);
   const controller = new AbortController();
   const target: ComposeTarget = {
     root,
@@ -413,12 +454,6 @@ export async function test(project: Project, args: string[]): Promise<void> {
     files: [...config.compose.files, ...(config.compose.test ?? [])],
     env: { ...process.env, ...composeEnv },
   };
-  // Teardown runs in its own process group, so a second Ctrl-C at the
-  // terminal cannot cut it short.
-  const remove = (stack: string) =>
-    compose({ ...target, project: stack }, ["down", "--volumes", "--remove-orphans"], {
-      detached: true,
-    });
 
   let interrupted: NodeJS.Signals | undefined;
   let tests: ChildProcess | undefined;
@@ -443,19 +478,9 @@ export async function test(project: Project, args: string[]): Promise<void> {
 
   let result = 1;
   try {
-    // Stacks of runs killed outright, which never reached their teardown.
-    const projects = await composeProjects(root);
-    const running = await runningTestLaunchers(
-      root,
-      projects.flatMap((stack) =>
-        stack.startsWith(prefix) ? (testProjectLauncher(stack, prefix) ?? []) : [],
-      ),
-    );
-    for (const leftover of abandonedTestProjects(projects, prefix, (pid) => running.has(pid))) {
-      controller.signal.throwIfAborted();
-      console.log(`Removing leftover test stack ${leftover}`);
-      await remove(leftover);
-    }
+    // Teardown, here and of this run's stack, runs in its own process
+    // group, so a second Ctrl-C at the terminal cannot cut it short.
+    await removeAbandonedTestStacks(root, prefix, { signal: controller.signal, detached: true });
 
     console.log(`Test stack: ${name}`);
     const services = await startServices(
@@ -505,7 +530,7 @@ export async function test(project: Project, args: string[]): Promise<void> {
   } finally {
     clearTimeout(escalation);
     try {
-      await remove(name);
+      await compose(target, removal, { detached: true });
     } catch (error) {
       console.error((error as Error).message);
       if (result === 0) result = 1;
