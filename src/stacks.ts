@@ -28,14 +28,25 @@ export async function list(): Promise<void> {
     console.log(`No stacks: nothing under ${stateHome()}`);
     return;
   }
-  await ensureDocker(process.cwd());
-  const running = await runningProjects();
+  const docker = states.some((state) => !state.hostOnly);
+  if (docker) await ensureDocker(process.cwd());
+  const running = docker ? await runningProjects() : new Set<string>();
   const gone = new Set(orphans(states, existsSync));
   const width = Math.max(...states.map(({ project }) => project.length));
   for (const state of states) {
     const status = [
       gone.has(state) ? "orphaned" : undefined,
-      running.has(state.project) ? "running" : gone.has(state) ? undefined : "stopped",
+      state.hostOnly
+        ? gone.has(state)
+          ? undefined
+          : state.stopped
+            ? "stopped"
+            : "ready"
+        : running.has(state.project)
+          ? "running"
+          : gone.has(state)
+            ? undefined
+            : "stopped",
     ]
       .filter(Boolean)
       .join(", ");
@@ -66,8 +77,8 @@ export async function prune(options: { yes: boolean }): Promise<void> {
     if (!/^y(es)?$/i.test(answer.trim())) return;
   }
 
-  await ensureDocker(process.cwd());
-  for (const { project, root } of gone) {
+  if (gone.some((state) => !state.hostOnly)) await ensureDocker(process.cwd());
+  for (const { project, root, hostOnly } of gone) {
     // The answer may have taken a while: a disk mounted meanwhile brings a
     // checkout, and its right to its data, back.
     if (existsSync(root)) {
@@ -75,10 +86,12 @@ export async function prune(options: { yes: boolean }): Promise<void> {
       continue;
     }
     // By name alone: the Compose files went with the checkout.
-    await removeProject(project);
-    // What its killed test runs left, which only a `devenv test` in the
-    // checkout would have found.
-    await removeAbandonedTestStacks(process.cwd(), testProjectPrefixOf(project));
+    if (!hostOnly) {
+      await removeProject(project);
+      // What its killed test runs left, which only a `devenv test` in the
+      // checkout would have found.
+      await removeAbandonedTestStacks(process.cwd(), testProjectPrefixOf(project));
+    }
     await removeState(project);
     console.log(`Removed ${project}`);
   }

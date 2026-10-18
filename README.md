@@ -7,7 +7,8 @@ Tailscale network.
 Every checkout gets a stack of its own, so several worktrees of a project run
 side by side. Nothing listens beyond this machine.
 
-Linux and macOS, Node 22.18 or newer, Docker Compose 2.24.4 or newer.
+Linux and macOS, Node 22.18 or newer. Stacks with Compose services also need
+Docker Compose 2.24.4 or newer.
 
 ## Install
 
@@ -54,7 +55,7 @@ npx skills add ./node_modules/@denny-il/devenv
 
 | Command                             | What it does                                                                    |
 | ----------------------------------- | ------------------------------------------------------------------------------- |
-| `devenv up`                         | Starts this worktree's services.                                                |
+| `devenv up`                         | Prepares this worktree's stack and app ports; starts any services.              |
 | `devenv dev`                        | Starts the services, runs `setup`, then runs every app until one stops.         |
 | `devenv dev --tailscale`            | The same, with the apps served to this machine's tailnet over HTTPS.            |
 | `devenv status`                     | Shows the services and the app URLs.                                            |
@@ -87,7 +88,7 @@ in place.
 
 A project adapts to the launcher, not the other way around.
 
-- **Compose files.** A base file and an overlay per mode. Services publish
+- **Compose files (optional).** A base file and an overlay per mode. Services publish
   their ports on loopback ports that Docker assigns
   (`ports: [{ target: 5432, host_ip: 127.0.0.1 }]`), never on fixed ones.
   Readiness is a `healthcheck`; a service without one is ready once it runs.
@@ -98,6 +99,58 @@ A project adapts to the launcher, not the other way around.
 - **Environment.** One function from the stack to the variables every app and
   command gets, on top of the root `.env`. A git worktree without a `.env`
   gets the main checkout's.
+
+## Host-only apps
+
+A project with no container dependencies omits `compose` (or sets
+`compose: { files: [] }` with no overlays). Docker is never probed or started
+for these stacks, including by `status`, `down`, `reset` and `test`.
+
+```ts
+import { defineConfig } from "@denny-il/devenv";
+
+export default defineConfig({
+  name: "app",
+  apps: {
+    server: {
+      command: "pnpm server dev",
+      ports: { http: {}, worker: { internal: true } },
+      env: (ports) => ({
+        HOST: "127.0.0.1",
+        PORT: ports.http,
+        WORKER_PORT: ports.worker,
+      }),
+    },
+    web: {
+      command: "pnpm web dev",
+      env: (ports) => ({ HOST: "127.0.0.1", PORT: ports.http }),
+    },
+  },
+  env: ({ root, port, url }) => ({
+    APP_CONFIG: `${root}/config.ts`,
+    API_ORIGIN: `http://127.0.0.1:${port("server.http")}`,
+    WEB_URL: url("web"),
+  }),
+});
+```
+
+`dev` runs setup and apps as usual; `dev --tailscale` serves the public app
+ports and keeps internal ones private. `up` assigns and remembers ports
+without launching apps, so `run` can use the environment. `status` reports
+those URLs, not app liveness. `down` marks the stack stopped and keeps its
+ports; `reset` removes its state. Stop the foreground `dev` process to stop
+its apps; `down` and `reset` manage stack state and any Compose resources,
+not another terminal's app processes. App data in host files is left to the
+project to manage.
+
+`test` runs `test.setup` and `test.command` with fresh app ports and a
+separate context, without starting the apps. `list` calls a prepared
+host-only stack `ready`, and host-only orphans can be pruned without Docker.
+A list or prune involving Compose stacks still needs Docker.
+
+Before converting an existing Compose stack, run `reset` to remove its
+resources. Older state files remain Compose states; removing `compose` from
+the config does not bypass their cleanup, and `reset` can clean them by name.
 
 ## Config
 
@@ -237,8 +290,8 @@ terminal it removes nothing unless given `--yes`.
 
 ## Under a sandbox
 
-An agent that runs commands in a sandbox needs two things allowed for the
-launcher: the Docker socket, and writing to `~/.local/state/devenv`. Without
+An agent that runs commands in a sandbox needs writing to
+`~/.local/state/devenv`, plus the Docker socket for Compose stacks. Without
 the second, a command stops before starting anything and names the directory.
 
 ## Working on this package

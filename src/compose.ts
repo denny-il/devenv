@@ -93,12 +93,17 @@ export const removal = ["down", "--remove-orphans", "--volumes", "--rmi", "local
  */
 export async function removeProject(
   project: string,
-  options: Pick<RunOptions, "detached"> = {},
+  options: Pick<RunOptions, "detached"> & { keepVolumes?: boolean } = {},
 ): Promise<void> {
+  const { keepVolumes, ...runOptions } = options;
   const empty = await mkdtemp(resolve(tmpdir(), "devenv-"));
   const { COMPOSE_FILE: _files, COMPOSE_ENV_FILES: _envFiles, ...env } = process.env;
   try {
-    await compose({ root: empty, project, files: [], env }, removal, options);
+    await compose(
+      { root: empty, project, files: [], env },
+      keepVolumes ? ["down", "--remove-orphans"] : removal,
+      runOptions,
+    );
   } finally {
     await rm(empty, { recursive: true, force: true });
   }

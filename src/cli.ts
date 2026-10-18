@@ -8,7 +8,7 @@ import { info, serve } from "./tailnet.ts";
 const usage = `Usage: devenv <command>
 
 Commands:
-  up                       Start this worktree's services
+  up                       Prepare app ports and start any services
   dev [--tailscale]        Start services, run setup, and run the apps; with
                            --tailscale they are served to this machine's
                            Tailscale network over HTTPS
@@ -16,8 +16,8 @@ Commands:
   run -- <command>         Run a command with this worktree's environment
   test [-- <args>]         Run the tests on a fresh, throwaway stack that is
                            always removed
-  down                     Stop services and keep their volumes
-  reset                    Stop services and delete this worktree's volumes
+  down                     Mark stopped; stop services and keep their volumes
+  reset                    Delete state and this worktree's Compose volumes
                            and the images built for it
   list                     Show every stack on this machine
   prune [--yes]            Remove the stacks whose checkout is gone, with

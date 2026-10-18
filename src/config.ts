@@ -68,9 +68,10 @@ export interface TestConfig {
 }
 
 export interface Config {
-  /** Names this project's Compose projects, and so its containers and volumes. */
+  /** Names this project's stacks, and any Compose containers and volumes. */
   name: string;
-  compose: ComposeConfig;
+  /** Omit for host-only apps. Empty file lists also need no Docker. */
+  compose?: ComposeConfig;
   /** Started by `dev` in this order. */
   apps?: Record<string, AppConfig>;
   /**
@@ -89,7 +90,7 @@ export interface Config {
 export interface Context {
   /** The directory of the config file. */
   root: string;
-  /** The stack's Compose project: one per worktree, and per run for tests. */
+  /** The stack's name: one per worktree, and per run for tests. */
   project: string;
   /** `compose.env` as the stack uses it, under `test.compose.env` for tests. */
   vars: Readonly<Record<string, string>>;
@@ -105,6 +106,12 @@ export interface Context {
 
 export function defineConfig(config: Config): Config {
   return config;
+}
+
+/** Whether any mode can leave Docker resources behind. */
+export function usesCompose(config: Config): boolean {
+  const compose = config.compose;
+  return !!(compose && (compose.files.length || compose.dev?.length || compose.test?.length));
 }
 
 export const defaultPorts: Record<string, PortOptions> = { http: {} };
