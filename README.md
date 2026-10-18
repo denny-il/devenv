@@ -103,8 +103,8 @@ A project adapts to the launcher, not the other way around.
 ## Host-only apps
 
 A project with no container dependencies omits `compose` (or sets
-`compose: { files: [] }` with no overlays). Docker is never probed or started
-for these stacks, including by `status`, `down`, `reset` and `test`.
+`compose: { files: [] }` with no overlays). Normal commands never probe or start Docker
+for these stacks, including `status`, `down`, `reset` and `test`.
 
 ```ts
 import { defineConfig } from "@denny-il/devenv";
@@ -146,11 +146,23 @@ project to manage.
 `test` runs `test.setup` and `test.command` with fresh app ports and a
 separate context, without starting the apps. `list` calls a prepared
 host-only stack `ready`, and host-only orphans can be pruned without Docker.
-A list or prune involving Compose stacks still needs Docker.
+`list` needs Docker only for dev stacks with containers; `prune` also needs
+it for stacks whose tests may have left Docker resources.
 
 Before converting an existing Compose stack, run `reset` to remove its
 resources. Older state files remain Compose states; removing `compose` from
 the config does not bypass their cleanup, and `reset` can clean them by name.
+If the state is unreadable, its mode is unknown: `reset` attempts Docker
+cleanup by name. When Docker is unavailable, it resets local state and warns
+that the named project may still have containers or volumes to remove.
+
+A config with only `compose.test` files keeps `dev`, `up`, `status`, `list`
+and `down` independent of Docker. `test`, `reset` and orphan pruning still
+need Docker to manage its test stacks. Removing the test files does not
+block host apps: saved cleanup metadata is kept until `reset`, so abandoned
+test resources can still be removed later. Compose variables are refreshed
+on each host-only startup; they freeze when dev Compose services can create
+volumes.
 
 ## Config
 

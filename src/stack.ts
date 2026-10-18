@@ -55,8 +55,7 @@ function devTarget(
 
 /** The Compose variables of the worktree's stack: those it was created with. */
 function composeEnvOf(project: Project, state: State | null): Record<string, string> {
-  if (state?.hostOnly && usesCompose(project.config))
-    return stringValues(project.config.compose?.env);
+  if (state?.hostOnly || state?.devHostOnly) return stringValues(project.config.compose?.env);
   return state?.composeEnv ?? stringValues(project.config.compose?.env);
 }
 
@@ -70,12 +69,19 @@ export function testComposeEnv(config: Config): Record<string, string> {
 /** Starts the worktree's services, with the variables their volumes know. */
 async function startStack(project: Project, earlier: State | null) {
   const hostOnly = !usesCompose(project.config);
-  if (hostOnly && earlier && !earlier.hostOnly)
+  const composeEnv = composeEnvOf(project, earlier);
+  const target = devTarget(project, composeEnv);
+  const devHostOnly = !target.files.length;
+  if (earlier && !earlier.hostOnly && !earlier.devHostOnly && devHostOnly)
     throw new Error(
       "Run `devenv reset` before switching an existing Compose stack to host-only apps",
     );
-  const composeEnv = composeEnvOf(project, earlier);
-  const target = devTarget(project, composeEnv);
+  const mode =
+    hostOnly && !earlier?.devHostOnly
+      ? { hostOnly: true as const }
+      : devHostOnly
+        ? { devHostOnly: true as const }
+        : {};
   if (target.files.length) await ensureDocker(project.root);
   if (!isDeepStrictEqual(composeEnv, stringValues(project.config.compose?.env)))
     console.warn(
@@ -84,7 +90,7 @@ async function startStack(project: Project, earlier: State | null) {
   // Before anything creates a volume: a first start that fails halfway must
   // not forget what its volumes were created with. Written on later starts
   // too, unchanged, so one that cannot save its state starts nothing.
-  const { hostOnly: _previousMode, ...previous } = earlier ?? {};
+  const { hostOnly: _previousMode, devHostOnly: _previousDevMode, ...previous } = earlier ?? {};
   await writeState({
     version: 1,
     root: project.root,
@@ -94,12 +100,12 @@ async function startStack(project: Project, earlier: State | null) {
     stopped: true,
     ...previous,
     composeEnv,
-    ...(hostOnly ? { hostOnly: true as const } : {}),
+    ...mode,
   });
   const services = target.files.length
     ? await startServices(target, project.config.compose?.init ?? [])
     : {};
-  return { composeEnv, services, ...(hostOnly ? { hostOnly: true as const } : {}) };
+  return { composeEnv, services, ...mode };
 }
 
 function printStack(config: Config, context: Context): void {
@@ -168,8 +174,12 @@ export async function dev(project: Project, options: { tailscale: boolean }): Pr
     } finally {
       // Nothing is served any more: the URLs are local ones again.
       if (tailnet) {
-        const { tailnet: _served, ...local } = state;
-        await writeState(local);
+        // Keep mode changes a concurrent test run recorded for cleanup.
+        const current = await readState(state.project);
+        if (current) {
+          const { tailnet: _served, ...local } = current;
+          await writeState(local);
+        }
       }
     }
   } finally {
@@ -310,7 +320,7 @@ export async function status(project: Project): Promise<void> {
     await ensureDocker(project.root);
     await compose(target, ["ps"]);
   }
-  if (state && !state.hostOnly && !usesCompose(project.config))
+  if (state && !state.hostOnly && !state.devHostOnly && !target.files.length)
     console.log(
       "This stack still has Compose state; run `devenv reset` to switch to host-only apps.",
     );
@@ -326,14 +336,29 @@ export async function status(project: Project): Promise<void> {
 /** `devenv down`, and `devenv reset` with `removeVolumes`. */
 export async function down(project: Project, removeVolumes: boolean): Promise<void> {
   // `reset` must work on a state it cannot read.
-  const state = removeVolumes
-    ? await readState(project.name).catch(() => null)
-    : await readState(project.name);
+  let damaged = false;
+  const state = await readState(project.name).catch((error) => {
+    if (!removeVolumes) throw error;
+    damaged = true;
+    return null;
+  });
   const target = devTarget(project, composeEnvOf(project, state));
   // Legacy states imply Docker even if the config has since dropped Compose.
-  const docker = usesCompose(project.config) || !!(state && !state.hostOnly);
+  let docker = removeVolumes
+    ? usesCompose(project.config) || !!(state && !state.hostOnly)
+    : !!target.files.length || !!(state && !state.hostOnly && !state.devHostOnly);
+  if (damaged && !docker) {
+    // Its mode is unknown: do not silently abandon an old Compose stack.
+    try {
+      await ensureDocker(project.root);
+      docker = true;
+    } catch (error) {
+      console.warn(
+        `The unreadable state cannot identify this stack's mode. Docker cleanup for project ${project.name} was skipped: ${(error as Error).message} Containers and volumes may remain; remove that project's Docker resources manually.`,
+      );
+    }
+  } else if (docker) await ensureDocker(project.root);
   if (docker) {
-    await ensureDocker(project.root);
     if (target.files.length)
       await compose(target, removeVolumes ? removal : ["down", "--remove-orphans"]);
     else await removeProject(project.name, { keepVolumes: !removeVolumes });
@@ -480,7 +505,11 @@ export async function test(project: Project, args: string[]): Promise<void> {
       // Remember that before creating any, so reset/prune still find them
       // after the test files or the checkout have gone.
       const { hostOnly: _previousMode, ...state } = earlier;
-      await writeState({ ...state, composeEnv: stringValues(config.compose?.env) });
+      await writeState({
+        ...state,
+        devHostOnly: true,
+        composeEnv: stringValues(config.compose?.env),
+      });
     }
   }
 

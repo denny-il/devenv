@@ -69,6 +69,8 @@ worktree. Build loopback origins with `port()` and public origins with
 `url()`.
 
 An empty base list with nonempty mode files still uses Compose in that mode.
+With only `compose.test` files, `dev`, `up`, `status`, `list` and `down` do
+not need Docker. `test`, `reset` and orphan pruning manage Docker resources.
 
 ## Fields
 
@@ -135,10 +137,12 @@ environment, or `compose.env`, has it.
 
 ## Things that surprise
 
-- **`compose.env` is fixed when the stack is first started.** A database
-  volume keeps the login it was initialized with, so the launcher keeps using
-  the original values and warns when the config's have changed. `devenv reset`
-  applies new ones, with empty data.
+- **`compose.env` is fixed when dev Compose services first start.** A
+  database volume keeps the login it was initialized with, so the launcher
+  keeps using the original values and warns when the config's have changed.
+  `devenv reset` applies new ones, with empty data. Host-only dev stacks,
+  including those with Compose-backed tests, refresh these variables on each
+  startup until they first start dev Compose services.
 - **A variable only the test overlay reads belongs in `test.compose.env`.**
   In `compose.env` it would change what the `dev` stack was created with and
   set off that warning. Under `test`, `vars` holds both.
