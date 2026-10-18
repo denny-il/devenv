@@ -12,6 +12,8 @@ export interface State {
   project: string;
   /** No mode uses Docker. Absent in older states, which belong to Compose stacks. */
   hostOnly?: true;
+  /** The dev stack has only host apps, but test runs may leave Docker resources. */
+  devHostOnly?: true;
   /** `compose.env` as the stack's volumes were created with. */
   composeEnv: Record<string, string>;
   services: Services;
@@ -90,6 +92,7 @@ export function parseState(content: string, project: string): State {
     root: value.root,
     project,
     ...(value.hostOnly === true ? { hostOnly: true as const } : {}),
+    ...(value.devHostOnly === true ? { devHostOnly: true as const } : {}),
     composeEnv,
     services: portTable(value.services),
     apps: portTable(value.apps),

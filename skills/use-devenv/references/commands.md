@@ -39,9 +39,17 @@ ports and a separate context, without launching apps or services.
 
 `list` reports host-only stacks as `ready` (environment prepared) or
 `stopped`. It and `prune` skip Docker when only host-only states are involved.
+With only `compose.test` files, the dev stack is still host-only: `dev`,
+`up`, `status`, `list` and `down` skip Docker. `test`, `reset` and orphan
+pruning need Docker for the test resources. Removing the test files keeps
+host apps usable without Docker; saved cleanup metadata remains until
+`reset` so abandoned test resources can still be found.
+
 Older states still imply Compose and need Docker for cleanup even if the
 config has since removed Compose. Run `reset` before switching such a stack
-to host-only apps.
+to host-only apps. Unreadable state has an unknown mode: `reset` attempts
+Docker cleanup by name. If Docker is unavailable, it resets local state and
+warns which project may still have containers or volumes to remove.
 
 ## How a stack starts
 
@@ -93,7 +101,7 @@ answer. Wait for an app's own "listening" line, or poll its URL.
 ## `list` and `prune`
 
 - `list` prints every stack on the machine: its Compose project, whether it
-  is `running`, `stopped` or `orphaned`, and its checkout.
+  is `running`, `ready`, `stopped` or `orphaned`, and its checkout.
 - A stack is orphaned once its checkout no longer exists, typically a
   worktree deleted without `devenv reset`. Its containers, volumes and built
   images are still in Docker.

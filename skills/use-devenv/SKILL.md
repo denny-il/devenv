@@ -62,12 +62,22 @@ app runs on the host. No dummy service or Docker installation is needed.
 port and environment behavior. `dev --tailscale` also works; use `url()`
 for the browser-facing URLs and `port()` for loopback connections.
 `status` shows assigned URLs, not whether apps are listening. `list` reports
-host-only stacks as `ready` or `stopped`; list/prune need Docker only when
-Compose states are involved. Host files are not deleted by `reset`.
+host app stacks as `ready` or `stopped`. `list` needs Docker for dev stacks
+with containers; `prune` also needs it for stacks with Compose-backed tests.
+Host files are not deleted by `reset`.
 
 An older state without the host-only marker is still a Compose state. Run
 `reset` before starting it with a host-only config; cleanup still needs
 Docker even after removing `compose` from that config.
+
+With only `compose.test` files, `dev`, `up`, `status`, `list` and `down`
+need no Docker; `test`, `reset` and orphan pruning still do. Removing test
+Compose files leaves host apps usable and keeps cleanup metadata until
+`reset`. Without dev Compose volumes, variables refresh on each startup.
+If state is
+unreadable, `reset` cannot identify its mode and attempts Docker cleanup.
+When Docker is unavailable, it resets local state and warns with the project
+name whose Docker resources may need manual cleanup.
 
 ## References
 

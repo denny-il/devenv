@@ -28,7 +28,7 @@ export async function list(): Promise<void> {
     console.log(`No stacks: nothing under ${stateHome()}`);
     return;
   }
-  const docker = states.some((state) => !state.hostOnly);
+  const docker = states.some((state) => !state.hostOnly && !state.devHostOnly);
   if (docker) await ensureDocker(process.cwd());
   const running = docker ? await runningProjects() : new Set<string>();
   const gone = new Set(orphans(states, existsSync));
@@ -36,7 +36,7 @@ export async function list(): Promise<void> {
   for (const state of states) {
     const status = [
       gone.has(state) ? "orphaned" : undefined,
-      state.hostOnly
+      state.hostOnly || state.devHostOnly
         ? gone.has(state)
           ? undefined
           : state.stopped

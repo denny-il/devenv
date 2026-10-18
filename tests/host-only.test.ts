@@ -102,7 +102,7 @@ function config(compose = ""): void {
       web: { command: [${JSON.stringify(process.execPath)}, "app.mjs"],
         env: ports => ({ APP: "web", HOST: "127.0.0.1", PORT: ports.http }) }
     },
-    env: ({ root, port, url, project }) => ({ CONFIG: root + "/config.json", API_ORIGIN: "http://127.0.0.1:" + port("server.http"), WEB_URL: url("web"), STACK: project }),
+    env: ({ root, port, url, project, vars }) => ({ COMPOSE_SECRET: vars.SECRET, CONFIG: root + "/config.json", API_ORIGIN: "http://127.0.0.1:" + port("server.http"), WEB_URL: url("web"), STACK: project }),
     setup: [[${JSON.stringify(process.execPath)}, "-e", "require('fs').writeFileSync('setup.json', JSON.stringify(process.env))"]],
     test: { command: [${JSON.stringify(process.execPath)}, "-e", "require('fs').writeFileSync('test.json', JSON.stringify(process.env)); process.exit(Number(process.argv[1] || 0))"] }
   };`,
@@ -334,14 +334,17 @@ test("adding Compose to a host-only stack records its credentials and restores D
   expect(existsSync(statePath())).toBe(false);
 });
 
-test("reset can discard damaged host-only state without Docker", async () => {
+test("reset warns about ambiguous damaged state when Docker is unavailable", async () => {
   config();
   await command("up");
   writeFileSync(statePath(), "{broken");
   await expect(command("up")).rejects.toThrow("Cannot read");
-  await command("reset");
+  const reset = await command("reset");
+  expect(reset.stderr).toContain(
+    `Docker cleanup for project ${projectName("fixture", root)} was skipped`,
+  );
+  expect(reset.stderr).toContain("Containers and volumes may remain");
   expect(existsSync(statePath())).toBe(false);
-  expect(existsSync(resolve(home, "docker.log"))).toBe(false);
 });
 
 test("adding Compose tests to a host-only stack retains Docker cleanup if the config is removed", async () => {
@@ -353,8 +356,16 @@ test("adding Compose tests to a host-only stack retains Docker cleanup if the co
   expect(state().hostOnly).toBeUndefined();
   expect(state().composeEnv).toEqual({ LOGIN: "new-database" });
   config();
-  await expect(command("up")).rejects.toThrow("reset");
   rmSync(resolve(home, "docker.log"));
+  delete env.ALLOW_DOCKER;
+  await command("up");
+  expect(state().devHostOnly).toBe(true);
+  expect(state().hostOnly).toBeUndefined();
+  expect((await command("status")).stdout).not.toContain("run `devenv reset`");
+  await command("down");
+  expect(state().stopped).toBe(true);
+  expect(existsSync(resolve(home, "docker.log"))).toBe(false);
+  env.ALLOW_DOCKER = "1";
   await command("reset");
   const calls: string[][] = readFileSync(resolve(home, "docker.log"), "utf8")
     .trim()
@@ -362,3 +373,117 @@ test("adding Compose tests to a host-only stack retains Docker cleanup if the co
     .map((line) => JSON.parse(line));
   expect(calls.some((args) => args.includes("down") && args.includes("--volumes"))).toBe(true);
 });
+
+test("damaged Compose state is cleaned by name after Compose is removed from config", async () => {
+  config('compose: { files: ["compose.yml"] },');
+  env.ALLOW_DOCKER = "1";
+  await command("up");
+  writeFileSync(statePath(), "{broken");
+  config();
+  rmSync(resolve(home, "docker.log"));
+  await command("reset");
+  const calls: string[][] = readFileSync(resolve(home, "docker.log"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+  expect(
+    calls.some(
+      (args) => args.includes("down") && args.includes("--volumes") && !args.includes("-f"),
+    ),
+  ).toBe(true);
+  expect(calls.some((args) => args.includes("volume") && args.includes("ls"))).toBe(true);
+  expect(existsSync(statePath())).toBe(false);
+});
+
+test("test-only Compose configs keep dev/up/status/list/down independent of Docker", async () => {
+  config('compose: { files: [], test: ["compose.test.yml"] },');
+  await command("up");
+  expect(state().devHostOnly).toBe(true);
+  expect(state().hostOnly).toBeUndefined();
+  expect((await command("status")).stdout).toContain("http://localhost:");
+  expect((await command("list")).stdout).toContain("ready");
+  const dev = start("dev");
+  await ready();
+  const closed = once(dev.child, "close");
+  dev.child.kill("SIGTERM");
+  expect((await closed)[0]).toBe(0);
+  await command("down");
+  expect(state().stopped).toBe(true);
+  expect((await command("list")).stdout).toContain("stopped");
+  expect(existsSync(resolve(home, "docker.log"))).toBe(false);
+  // Reset still owns the throwaway test resources, including abandoned runs.
+  env.ALLOW_DOCKER = "1";
+  await command("reset");
+  expect(existsSync(statePath())).toBe(false);
+});
+
+test("a dev-only Compose overlay does not make the test command require Docker", async () => {
+  config('compose: { files: [], dev: ["compose.dev.yml"] },');
+  env.ALLOW_DOCKER = "1";
+  await command("up");
+  expect(state().devHostOnly).toBeUndefined();
+  rmSync(resolve(home, "docker.log"));
+  delete env.ALLOW_DOCKER;
+  await command("test");
+  expect(existsSync(resolve(home, "docker.log"))).toBe(false);
+});
+
+test("removing dev Compose files requires cleanup even when test Compose files remain", async () => {
+  config('compose: { files: ["compose.yml"] },');
+  env.ALLOW_DOCKER = "1";
+  await command("up");
+  config('compose: { files: [], test: ["compose.test.yml"] },');
+  expect((await command("status")).stdout).toContain("run `devenv reset`");
+  await expect(command("up")).rejects.toThrow("reset");
+  expect(state().devHostOnly).toBeUndefined();
+});
+
+test("Tailscale teardown preserves Docker cleanup recorded by a concurrent test run", async () => {
+  config();
+  const dev = start("dev", "--tailscale");
+  await ready();
+  config('compose: { files: [], test: ["compose.test.yml"] },');
+  env.ALLOW_DOCKER = "1";
+  await command("test");
+  expect(state().devHostOnly).toBe(true);
+  const closed = once(dev.child, "close");
+  dev.child.kill("SIGTERM");
+  expect((await closed)[0]).toBe(0);
+  expect(state().tailnet).toBeUndefined();
+  expect(state().hostOnly).toBeUndefined();
+  expect(state().devHostOnly).toBe(true);
+});
+
+test.each(["", ', test: ["compose.test.yml"]'])(
+  "volume-free dev stacks refresh variables before first Compose startup (%s)",
+  async (overlay) => {
+    config(`compose: { files: [], env: { SECRET: "a" }${overlay} },`);
+    await command("up");
+    config(`compose: { files: [], env: { SECRET: "b" }${overlay} },`);
+    expect((await command("up")).stderr).not.toContain(
+      "differs from what this stack was created with",
+    );
+    expect(state().composeEnv).toEqual({ SECRET: "b" });
+    const result = await command(
+      "run",
+      "--",
+      process.execPath,
+      "-e",
+      "console.log(process.env.COMPOSE_SECRET)",
+    );
+    expect(result.stdout.trim()).toBe("b");
+    expect(existsSync(resolve(home, "docker.log"))).toBe(false);
+    // The first real dev volumes must use current values, then retain them.
+    env.ALLOW_DOCKER = "1";
+    config('compose: { files: ["compose.yml"], env: { SECRET: "c" } },');
+    expect((await command("up")).stderr).not.toContain(
+      "differs from what this stack was created with",
+    );
+    expect(state().composeEnv).toEqual({ SECRET: "c" });
+    expect(state().hostOnly).toBeUndefined();
+    expect(state().devHostOnly).toBeUndefined();
+    config('compose: { files: ["compose.yml"], env: { SECRET: "d" } },');
+    expect((await command("up")).stderr).toContain("differs from what this stack was created with");
+    expect(state().composeEnv).toEqual({ SECRET: "c" });
+  },
+);
