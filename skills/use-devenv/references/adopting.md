@@ -5,7 +5,14 @@ is what has to be true of the project, then the steps to get there.
 
 ## What the project must look like
 
-**Compose files**
+**Host-only projects**
+
+If there are no container dependencies, omit `compose` from the config (or
+use `compose: { files: [] }` with no overlays). Skip the Compose adoption
+steps below. Configure host apps and their environment directly; Docker is
+not needed. `up` still assigns ports for `run`, and `dev --tailscale` works.
+
+**Compose files (when needed)**
 
 - A base file with the services, plus one overlay for `dev` and, if tests need
   services, one for `test`.
@@ -49,7 +56,7 @@ is what has to be true of the project, then the steps to get there.
    `"local": "devenv"`.
 2. Move published ports out of the base Compose file into the `dev` overlay,
    as loopback ports Docker assigns. Add healthchecks.
-3. Write `devenv.config.ts`: `name`, `compose`, then `env` built from
+3. Write `devenv.config.ts`: `name`, optional `compose`, then `env` built from
    `service(...)` and `vars`. Run `devenv up` and `devenv status`; fix until
    the services start and `devenv run -- <a migration or query>` works.
 4. Add the apps one at a time, each with the variables that set its port and

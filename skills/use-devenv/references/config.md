@@ -58,11 +58,24 @@ export default defineConfig({
 });
 ```
 
+## Host-only config
+
+`compose` is optional. Omit it, or use `compose: { files: [] }` with no
+`dev` or `test` files, for a stack that never needs Docker. App ports,
+internal ports, `env`, `setup`, `info` and `--tailscale` work the same way.
+`vars` is empty when no Compose variables are configured; `service()` throws
+because there are no services. `project` still names a unique stack per
+worktree. Build loopback origins with `port()` and public origins with
+`url()`.
+
+An empty base list with nonempty mode files still uses Compose in that mode.
+
 ## Fields
 
 | Field              | Meaning                                                                          |
 | ------------------ | -------------------------------------------------------------------------------- |
-| `name`             | Start of the Compose project names. Lowercase letters, digits, `-`, `_`.         |
+| `name`             | Start of the stack names. Lowercase letters, digits, `-`, `_`.                   |
+| `compose`          | Optional Compose configuration; omitted for host-only stacks.                    |
 | `compose.files`    | Compose files of every mode, relative to the root.                               |
 | `compose.dev`      | Overlays added for `up` and `dev`.                                               |
 | `compose.test`     | Overlays added for `test`.                                                       |

@@ -10,13 +10,15 @@ export interface State {
   /** The real path of the stack's checkout. A stack whose checkout is gone is an orphan. */
   root: string;
   project: string;
+  /** No mode uses Docker. Absent in older states, which belong to Compose stacks. */
+  hostOnly?: true;
   /** `compose.env` as the stack's volumes were created with. */
   composeEnv: Record<string, string>;
   services: Services;
   apps: Record<string, { ports: Record<string, number> }>;
   /** The tailnet name the app URLs are under, when served over Tailscale. */
   tailnet?: string;
-  /** The services are down; their volumes and so `composeEnv` remain. */
+  /** The stack is stopped; app ports and any volumes and `composeEnv` remain. */
   stopped?: true;
 }
 
@@ -87,6 +89,7 @@ export function parseState(content: string, project: string): State {
     version: 1,
     root: value.root,
     project,
+    ...(value.hostOnly === true ? { hostOnly: true as const } : {}),
     composeEnv,
     services: portTable(value.services),
     apps: portTable(value.apps),

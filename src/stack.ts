@@ -12,7 +12,7 @@ import {
   removeVolumesOf,
   startServices,
 } from "./compose.ts";
-import { type Command, type Config, type Context, defaultPorts } from "./config.ts";
+import { type Command, type Config, type Context, defaultPorts, usesCompose } from "./config.ts";
 import { appPorts, createContext, createEnvironment, stringValues } from "./context.ts";
 import {
   abandonedTestProjects,
@@ -26,7 +26,7 @@ import { type Exit, exitStatus, reapGroup, run, signalGroup, spawnCommand } from
 import { type State, readState, removeState, statePath, writeState } from "./state.ts";
 import { createServing, tailnetHost } from "./tailnet.ts";
 
-/** A project's config, where it is, and its worktree's Compose project. */
+/** A project's config, where it is, and its worktree's stack name. */
 export interface Project {
   root: string;
   config: Config;
@@ -48,50 +48,58 @@ function devTarget(
   return {
     root,
     project: name,
-    files: [...config.compose.files, ...(config.compose.dev ?? [])],
+    files: [...(config.compose?.files ?? []), ...(config.compose?.dev ?? [])],
     env: { ...process.env, ...composeEnv },
   };
 }
 
 /** The Compose variables of the worktree's stack: those it was created with. */
 function composeEnvOf(project: Project, state: State | null): Record<string, string> {
-  return state?.composeEnv ?? stringValues(project.config.compose.env);
+  if (state?.hostOnly && usesCompose(project.config))
+    return stringValues(project.config.compose?.env);
+  return state?.composeEnv ?? stringValues(project.config.compose?.env);
 }
 
 /** The Compose variables of a test stack: `test.compose.env` over `compose.env`. */
 export function testComposeEnv(config: Config): Record<string, string> {
   // Each made strings first: one left `undefined` for tests must not unset
   // what `compose.env` gives.
-  return { ...stringValues(config.compose.env), ...stringValues(config.test?.compose?.env) };
+  return { ...stringValues(config.compose?.env), ...stringValues(config.test?.compose?.env) };
 }
 
 /** Starts the worktree's services, with the variables their volumes know. */
 async function startStack(project: Project, earlier: State | null) {
-  await ensureDocker(project.root);
+  const hostOnly = !usesCompose(project.config);
+  if (hostOnly && earlier && !earlier.hostOnly)
+    throw new Error(
+      "Run `devenv reset` before switching an existing Compose stack to host-only apps",
+    );
   const composeEnv = composeEnvOf(project, earlier);
-  if (!isDeepStrictEqual(composeEnv, stringValues(project.config.compose.env)))
+  const target = devTarget(project, composeEnv);
+  if (target.files.length) await ensureDocker(project.root);
+  if (!isDeepStrictEqual(composeEnv, stringValues(project.config.compose?.env)))
     console.warn(
       "`compose.env` differs from what this stack was created with, which stays in use. Run `devenv reset` to start over with the new values.",
     );
   // Before anything creates a volume: a first start that fails halfway must
   // not forget what its volumes were created with. Written on later starts
   // too, unchanged, so one that cannot save its state starts nothing.
-  await writeState(
-    earlier ?? {
-      version: 1,
-      root: project.root,
-      project: project.name,
-      composeEnv,
-      services: {},
-      apps: {},
-      stopped: true,
-    },
-  );
-  const services = await startServices(
-    devTarget(project, composeEnv),
-    project.config.compose.init ?? [],
-  );
-  return { composeEnv, services };
+  const { hostOnly: _previousMode, ...previous } = earlier ?? {};
+  await writeState({
+    version: 1,
+    root: project.root,
+    project: project.name,
+    services: {},
+    apps: {},
+    stopped: true,
+    ...previous,
+    composeEnv,
+    ...(hostOnly ? { hostOnly: true as const } : {}),
+  });
+  const services = target.files.length
+    ? await startServices(target, project.config.compose?.init ?? [])
+    : {};
+  return { composeEnv, services, ...(hostOnly ? { hostOnly: true as const } : {}) };
 }
 
 function printStack(config: Config, context: Context): void {
@@ -296,38 +304,49 @@ async function runApps(config: Config, state: State, reservations: AppReservatio
 
 /** `devenv status` */
 export async function status(project: Project): Promise<void> {
-  await ensureDocker(project.root);
   const state = await readState(project.name);
-  await compose(devTarget(project, composeEnvOf(project, state)), ["ps"]);
+  const target = devTarget(project, composeEnvOf(project, state));
+  if (target.files.length) {
+    await ensureDocker(project.root);
+    await compose(target, ["ps"]);
+  }
+  if (state && !state.hostOnly && !usesCompose(project.config))
+    console.log(
+      "This stack still has Compose state; run `devenv reset` to switch to host-only apps.",
+    );
   if (!state) {
     console.log(`No stack yet: nothing at ${statePath(project.name)}`);
     return;
   }
   console.log(`State: ${statePath(project.name)}`);
-  if (state.stopped) console.log("The services are stopped.");
+  if (state.stopped) console.log("The stack is stopped.");
   else printStack(project.config, createContext(state));
 }
 
 /** `devenv down`, and `devenv reset` with `removeVolumes`. */
 export async function down(project: Project, removeVolumes: boolean): Promise<void> {
-  await ensureDocker(project.root);
   // `reset` must work on a state it cannot read.
   const state = removeVolumes
     ? await readState(project.name).catch(() => null)
     : await readState(project.name);
-  await compose(
-    devTarget(project, composeEnvOf(project, state)),
-    removeVolumes ? removal : ["down", "--remove-orphans"],
-  );
+  const target = devTarget(project, composeEnvOf(project, state));
+  // Legacy states imply Docker even if the config has since dropped Compose.
+  const docker = usesCompose(project.config) || !!(state && !state.hostOnly);
+  if (docker) {
+    await ensureDocker(project.root);
+    if (target.files.length)
+      await compose(target, removeVolumes ? removal : ["down", "--remove-orphans"]);
+    else await removeProject(project.name, { keepVolumes: !removeVolumes });
+  }
   if (removeVolumes) {
-    await removeVolumesOf(project.root, project.name);
+    if (docker) {
+      await removeVolumesOf(project.root, project.name);
+      await removeAbandonedTestStacks(
+        project.root,
+        testProjectPrefix(project.config.name, project.root),
+      );
+    }
     await removeState(project.name);
-    // Nothing of the worktree is left, which may be deleted next: only the
-    // next `devenv test` in it would find these.
-    await removeAbandonedTestStacks(
-      project.root,
-      testProjectPrefix(project.config.name, project.root),
-    );
     return;
   }
   // The kept volumes keep what they were created with, and the apps their
@@ -443,7 +462,6 @@ export async function test(project: Project, args: string[]): Promise<void> {
   const { root, config } = project;
   if (!config.test) throw new Error("The config has no `test` section to run tests with");
   const { setup = [], command, env } = config.test;
-  await ensureDocker(root);
   const prefix = testProjectPrefix(config.name, root);
   const name = createTestProjectName(prefix, process.pid, randomBytes(3).toString("hex"));
   const composeEnv = testComposeEnv(config);
@@ -451,9 +469,20 @@ export async function test(project: Project, args: string[]): Promise<void> {
   const target: ComposeTarget = {
     root,
     project: name,
-    files: [...config.compose.files, ...(config.compose.test ?? [])],
+    files: [...(config.compose?.files ?? []), ...(config.compose?.test ?? [])],
     env: { ...process.env, ...composeEnv },
   };
+  if (target.files.length) {
+    await ensureDocker(root);
+    const earlier = await readState(project.name).catch(() => null);
+    if (earlier?.hostOnly) {
+      // A killed test can leave Docker resources even when dev has none.
+      // Remember that before creating any, so reset/prune still find them
+      // after the test files or the checkout have gone.
+      const { hostOnly: _previousMode, ...state } = earlier;
+      await writeState({ ...state, composeEnv: stringValues(config.compose?.env) });
+    }
+  }
 
   let interrupted: NodeJS.Signals | undefined;
   let tests: ChildProcess | undefined;
@@ -480,13 +509,13 @@ export async function test(project: Project, args: string[]): Promise<void> {
   try {
     // Teardown, here and of this run's stack, runs in its own process
     // group, so a second Ctrl-C at the terminal cannot cut it short.
-    await removeAbandonedTestStacks(root, prefix, { signal: controller.signal, detached: true });
+    if (target.files.length)
+      await removeAbandonedTestStacks(root, prefix, { signal: controller.signal, detached: true });
 
     console.log(`Test stack: ${name}`);
-    const services = await startServices(
-      { ...target, signal: controller.signal },
-      config.compose.init ?? [],
-    );
+    const services = target.files.length
+      ? await startServices({ ...target, signal: controller.signal }, config.compose?.init ?? [])
+      : {};
     // Nothing listens on the apps' ports; their URLs are still configured.
     const reservations = await reserveAppPorts(config.apps ?? {}, undefined);
     await reservations.releaseAll();
@@ -530,7 +559,7 @@ export async function test(project: Project, args: string[]): Promise<void> {
   } finally {
     clearTimeout(escalation);
     try {
-      await compose(target, removal, { detached: true });
+      if (target.files.length) await compose(target, removal, { detached: true });
     } catch (error) {
       console.error((error as Error).message);
       if (result === 0) result = 1;

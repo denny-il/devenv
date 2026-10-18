@@ -26,12 +26,29 @@ This needs git 2.36 or newer.
 | `devenv tailnet info [--json]`      | Prints this machine's tailnet name and what keeps it from serving.                   |
 | `devenv tailnet serve <port>…`      | Serves local ports to the tailnet over HTTPS until stopped.                          |
 
+## Host-only stacks
+
+When `compose` is omitted, or all its file lists are empty, all stack commands
+skip Docker. `up` prepares app ports and enables `run`; `dev` runs setup and
+apps, including optional Tailscale serving. `status` prints assigned URLs,
+not app liveness. `down` marks the stack stopped while preserving ports;
+`reset` removes state, not files the apps wrote on the host. Stop `dev` with
+a signal to stop its app processes; neither `down` nor `reset` stops apps
+owned by another launcher. `test` runs its setup and command with fresh
+ports and a separate context, without launching apps or services.
+
+`list` reports host-only stacks as `ready` (environment prepared) or
+`stopped`. It and `prune` skip Docker when only host-only states are involved.
+Older states still imply Compose and need Docker for cleanup even if the
+config has since removed Compose. Run `reset` before switching such a stack
+to host-only apps.
+
 ## How a stack starts
 
 `dev` does these in order, and stops at the first that fails:
 
-1. Starts the Compose services and waits until each is healthy.
-2. Runs the `compose.init` services, each to its end.
+1. Starts any Compose services and waits until each is healthy.
+2. Runs any `compose.init` services, each to its end.
 3. Reserves a port for every app port, the same ones as last time while they
    are free.
 4. With `--tailscale`, serves the app ports to the tailnet.
@@ -49,7 +66,8 @@ answer. Wait for an app's own "listening" line, or poll its URL.
 - Any app exiting stops the whole stack.
 - `dev` exits 0 when it was stopped by a signal, and otherwise with the exit
   status of the app that stopped the stack.
-- The services keep running after `dev` ends. `down` stops them.
+- Any Compose services keep running after `dev` ends. `down` stops them.
+  The prepared environment remains usable by `run` until `down` or `reset`.
 
 ## `run`
 

@@ -6,7 +6,7 @@ description: "Use when a project runs its local stack with @denny-il/devenv (it 
 # Use devenv
 
 `@denny-il/devenv` runs a project's whole local stack from one command: its
-Docker Compose services, the apps that run on the host, and, when asked, HTTPS
+optional Docker Compose services, the apps that run on the host, and, when asked, HTTPS
 access from the machine's Tailscale network. Every checkout gets a stack of its
 own, so several worktrees of one project run side by side without sharing
 ports, containers or data.
@@ -27,10 +27,13 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
 - **Run commands that need the stack through `devenv run -- <command>`**:
   migrations, scripts, a database shell. It supplies the same environment the
   apps get, so nothing has to be copied out of the state file.
-- **Run service-backed tests with `devenv test [-- <args>]`.** Each run gets
-  fresh services of its own and removes them afterwards; the `dev` stack and
+- **Run configured tests with `devenv test [-- <args>]`.** Each run gets
+  fresh services when configured and removes them afterwards; host-only tests
+  need no Docker. The `dev` stack and
   its data are not touched.
-- **Stop with `devenv down`, which keeps the data.** `devenv reset` deletes
+- **Stop the foreground `dev` process to stop its apps.** `devenv down`
+  stops any services and marks the stack stopped, keeping data and app ports.
+  `devenv reset` deletes
   this worktree's volumes, built images and state; run it before deleting a
   worktree, or its containers, volumes and images are left behind.
 - **Leave Docker Compose to the launcher.** It names the Compose project per
@@ -43,12 +46,28 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   the services' credentials, so do not print or copy it; ask `status` or `run`
   instead.
 - **In a sandbox, ask for access instead of working around it.** The launcher
-  needs the Docker socket and write access to `~/.local/state/devenv`. When a
+  needs write access to `~/.local/state/devenv`, and the Docker socket only
+  for Compose stacks. When a
   command fails with "Cannot write … allow writing there", ask the user to
   allow that directory; pointing the state somewhere else would start a
   second stack that nothing else knows about.
 - **Run `devenv prune` only when asked to.** It deletes the data of stacks
   whose checkout is gone, and a checkout that was merely moved looks the same.
+
+## Host-only projects
+
+Omit `compose`, or use `compose: { files: [] }` without overlays, when every
+app runs on the host. No dummy service or Docker installation is needed.
+`dev`, `up`, `status`, `run`, `test`, `down` and `reset` keep their usual
+port and environment behavior. `dev --tailscale` also works; use `url()`
+for the browser-facing URLs and `port()` for loopback connections.
+`status` shows assigned URLs, not whether apps are listening. `list` reports
+host-only stacks as `ready` or `stopped`; list/prune need Docker only when
+Compose states are involved. Host files are not deleted by `reset`.
+
+An older state without the host-only marker is still a Compose state. Run
+`reset` before starting it with a host-only config; cleanup still needs
+Docker even after removing `compose` from that config.
 
 ## References
 
