@@ -80,9 +80,15 @@ export function testComposeEnv(config: Config): Record<string, string> {
 
 /**
  * Starts the worktree's services, with the variables their volumes know.
- * `launcher` is recorded from the first write on.
+ * `launcher` is recorded from the first write on. With `keepServices`, the
+ * services are left as `earlier` records them, neither started nor checked.
  */
-async function startStack(project: Project, earlier: State | null, launcher?: State["launcher"]) {
+async function startStack(
+  project: Project,
+  earlier: State | null,
+  launcher?: State["launcher"],
+  keepServices = false,
+) {
   const hostOnly = !usesCompose(project.config);
   const composeEnv = composeEnvOf(project, earlier);
   const target = devTarget(project, composeEnv);
@@ -97,7 +103,7 @@ async function startStack(project: Project, earlier: State | null, launcher?: St
       : devHostOnly
         ? { devHostOnly: true as const }
         : {};
-  if (target.files.length) await ensureDocker(project.root);
+  if (target.files.length && !keepServices) await ensureDocker(project.root);
   if (!isDeepStrictEqual(composeEnv, stringValues(project.config.compose?.env)))
     console.warn(
       "`compose.env` differs from what this stack was created with, which stays in use. Run `devenv reset` to start over with the new values.",
@@ -128,13 +134,16 @@ async function startStack(project: Project, earlier: State | null, launcher?: St
     ...mode,
     ...(recorded ? { launcher: recorded } : {}),
   });
-  const services = target.files.length
-    ? await startServices(target, project.config.compose?.init ?? [])
-    : {};
+  const services = keepServices
+    ? (earlier?.services ?? {})
+    : target.files.length
+      ? await startServices(target, project.config.compose?.init ?? [])
+      : {};
   return { composeEnv, services, ...mode };
 }
 
-function printStack(config: Config, context: Context): void {
+/** The app URLs, then the `info` lines: `info` as given, or the config's for `context`. */
+function printStack(config: Config, context: Context, info?: Record<string, string>): void {
   for (const [app, { ports = defaultPorts }] of Object.entries(config.apps ?? {})) {
     const listed = Object.keys(ports).filter((name) => !ports[name]?.internal);
     for (const name of listed) {
@@ -142,7 +151,7 @@ function printStack(config: Config, context: Context): void {
       console.log(`${listed.length === 1 ? app : ref}: ${context.url(ref)}`);
     }
   }
-  for (const [label, value] of Object.entries(config.info?.(context) ?? {}))
+  for (const [label, value] of Object.entries(info ?? config.info?.(context) ?? {}))
     console.log(`${label}: ${value}`);
 }
 
@@ -198,12 +207,28 @@ async function refuseSecondLauncher(root: string, state: State | null): Promise<
     );
 }
 
-/** `devenv start`: services, setup, then every app until one stops. */
-export async function start(project: Project, options: { tailscale: boolean }): Promise<void> {
+/** Refuses to start only the apps of a stack that has no services up to keep. */
+function refuseAppsOnly(state: State | null): void {
+  if (!state || state.stopped)
+    throw new Error("The stack is not up: run `devenv restart` without `--apps`");
+}
+
+/**
+ * `devenv start`: services, setup, then every app until one stops. With
+ * `apps`, the services are kept as they are, and neither `compose.init` nor
+ * `setup` runs.
+ */
+export async function start(
+  project: Project,
+  options: { tailscale: boolean; apps?: boolean },
+): Promise<void> {
   const { root, config } = project;
   const earlier = await readState(project.name);
   // Before anything else, and again just before the launcher is recorded.
   await refuseSecondLauncher(root, earlier);
+  // Again after `restart`'s check: a `down` may have run while it waited
+  // for the previous `start` to stop.
+  if (options.apps) refuseAppsOnly(earlier);
   console.log(`Stack ${project.name} (pid ${process.pid})`);
   // Over Tailscale the apps listen on this machine only, as ever: their
   // ports are served to the tailnet over HTTPS under this machine's name
@@ -216,7 +241,7 @@ export async function start(project: Project, options: { tailscale: boolean }): 
   const launcher = launched ? { pid: process.pid, started: launched } : undefined;
   let served = false;
   try {
-    const started = await startStack(project, earlier, launcher);
+    const started = await startStack(project, earlier, launcher, options.apps);
     const reservations = await reserveAppPorts(config.apps ?? {}, earlier?.apps);
     try {
       const state: State = {
@@ -230,7 +255,7 @@ export async function start(project: Project, options: { tailscale: boolean }): 
       };
       await writeState(state);
       served = !!tailnet;
-      await runApps(config, state, reservations);
+      await runApps(config, state, reservations, { setup: !options.apps });
     } finally {
       await reservations.releaseAll();
     }
@@ -282,20 +307,36 @@ export async function stop(project: Project): Promise<void> {
   if (!state || pid === undefined)
     throw new Error("No `devenv start` is running for this worktree");
   await stopLauncher(project.root, state, pid);
-  console.log("Stopped");
+  console.log(`Stopped \`devenv start\` (pid ${pid})`);
 }
 
 /**
  * `devenv restart`: stops the `devenv start` running this worktree's stack,
  * if one is, and starts again in this process, served over Tailscale when
- * asked to or when the stopped one was.
+ * asked to or when the stopped one was. With `apps`, only the apps start
+ * again, on the services as they are.
  */
-export async function restart(project: Project, options: { tailscale: boolean }): Promise<void> {
+export async function restart(
+  project: Project,
+  options: { tailscale: boolean; apps: boolean },
+): Promise<void> {
   const state = await readState(project.name);
+  // Before anything is stopped: there must be services to keep.
+  if (options.apps) refuseAppsOnly(state);
   const pid = await runningLauncher(project.root, state);
   if (state && pid !== undefined) await stopLauncher(project.root, state, pid);
   else console.log("No `devenv start` was running for this worktree");
-  await start(project, { tailscale: options.tailscale || (pid !== undefined && !!state?.tailnet) });
+  await start(project, {
+    tailscale: options.tailscale || (pid !== undefined && !!state?.tailnet),
+    apps: options.apps,
+  });
+}
+
+/** Adds `info` to this process's launcher record, if it is still the recorded one. */
+async function recordInfo(project: string, info: Record<string, string>): Promise<void> {
+  const current = await readState(project);
+  if (current?.launcher?.pid !== process.pid) return;
+  await writeState({ ...current, launcher: { ...current.launcher, info } });
 }
 
 /** How an exit reads in a message. */
@@ -308,7 +349,12 @@ function describeExit({ code, signal }: Exit): string {
  * apps start one after another without waiting for each other; the stack is
  * reported ready once every app with a readiness check answers.
  */
-async function runApps(config: Config, state: State, reservations: AppReservations): Promise<void> {
+async function runApps(
+  config: Config,
+  state: State,
+  reservations: AppReservations,
+  options: { setup: boolean },
+): Promise<void> {
   const { root, tailnet } = state;
   const apps = Object.entries(config.apps ?? {});
   const context = createContext(state);
@@ -377,7 +423,7 @@ async function runApps(config: Config, state: State, reservations: AppReservatio
         stop();
       });
     }
-    for (const command of config.setup ?? [])
+    for (const command of options.setup ? (config.setup ?? []) : [])
       await run(command, {
         cwd: root,
         env: environment,
@@ -456,7 +502,11 @@ async function runApps(config: Config, state: State, reservations: AppReservatio
       if (probes.size) console.log(`Ready: ${[...probes.keys()].join(", ")}`);
       if (unchecked.length)
         console.log(`Started, without a readiness check: ${unchecked.join(", ")}`);
-      printStack(config, context);
+      // Recorded for `status`, which shows what this run printed: `info`
+      // may depend on this process's environment, which `status` lacks.
+      const info = stringValues(config.info?.(context));
+      printStack(config, context, info);
+      await recordInfo(state.project, info);
     }
   } catch (error) {
     if (!interrupted) failure ??= error;
@@ -507,7 +557,14 @@ export async function status(project: Project): Promise<void> {
   else {
     if (launcher === undefined && Object.keys(project.config.apps ?? {}).length)
       console.log("No `devenv start` is running; the apps answer here while one runs them:");
-    printStack(project.config, createContext(state));
+    // What the running `start` printed, which `info` evaluated in this
+    // environment may not match. One not ready yet, or of an older version,
+    // has recorded none.
+    printStack(
+      project.config,
+      createContext(state),
+      launcher === undefined ? undefined : state.launcher?.info,
+    );
   }
 }
 

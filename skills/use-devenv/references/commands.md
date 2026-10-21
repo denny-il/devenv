@@ -11,22 +11,22 @@ This needs git 2.36 or newer.
 
 `list`, `prune`, `setup` and `tailnet` need no project.
 
-| Command                             | What it does                                                                         |
-| ----------------------------------- | ------------------------------------------------------------------------------------ |
-| `devenv up`                         | Starts the services and assigns the app ports.                                       |
-| `devenv start [--tailscale]`        | Starts the services, runs `setup`, runs every app until one stops.                   |
-| `devenv stop`                       | Stops this worktree's running `start` and waits until it has ended.                  |
-| `devenv restart [--tailscale]`      | Stops this worktree's running `start`, if any, and starts again in its place.        |
-| `devenv status`                     | Lists the containers, whether `start` runs, the app URLs and the `info` lines.       |
-| `devenv run -- <command>`           | Runs a command with the stack's environment.                                         |
-| `devenv test [-- <args>]`           | Runs the tests on a fresh stack that is always removed.                              |
-| `devenv down`                       | Stops the services; keeps volumes, credentials and app ports.                        |
-| `devenv reset`                      | Removes containers, volumes, built images, the state, and killed test runs' stacks.  |
-| `devenv list`                       | Shows every stack on this machine.                                                   |
-| `devenv prune [--yes]`              | Removes the stacks whose checkout is gone, with their data.                          |
-| `devenv setup [docker] [tailscale]` | Installs and sets up Docker and Tailscale on this machine; both unless one is named. |
-| `devenv tailnet info [--json]`      | Prints this machine's tailnet name and what keeps it from serving.                   |
-| `devenv tailnet serve <port>…`      | Serves local ports to the tailnet over HTTPS until stopped.                          |
+| Command                                 | What it does                                                                         |
+| --------------------------------------- | ------------------------------------------------------------------------------------ |
+| `devenv up`                             | Starts the services and assigns the app ports.                                       |
+| `devenv start [--tailscale]`            | Starts the services, runs `setup`, runs every app until one stops.                   |
+| `devenv stop`                           | Stops this worktree's running `start` and waits until it has ended.                  |
+| `devenv restart [--tailscale] [--apps]` | Stops this worktree's running `start`, if any, and starts again in its place.        |
+| `devenv status`                         | Lists the containers, whether `start` runs, the app URLs and the `info` lines.       |
+| `devenv run -- <command>`               | Runs a command with the stack's environment.                                         |
+| `devenv test [-- <args>]`               | Runs the tests on a fresh stack that is always removed.                              |
+| `devenv down`                           | Stops the services; keeps volumes, credentials and app ports.                        |
+| `devenv reset`                          | Removes containers, volumes, built images, the state, and killed test runs' stacks.  |
+| `devenv list`                           | Shows every stack on this machine.                                                   |
+| `devenv prune [--yes]`                  | Removes the stacks whose checkout is gone, with their data.                          |
+| `devenv setup [docker] [tailscale]`     | Installs and sets up Docker and Tailscale on this machine; both unless one is named. |
+| `devenv tailnet info [--json]`          | Prints this machine's tailnet name and what keeps it from serving.                   |
+| `devenv tailnet serve <port>…`          | Serves local ports to the tailnet over HTTPS until stopped.                          |
 
 `devenv dev`, the name of `start` before 0.5.0, now fails with a message
 naming `start`.
@@ -118,11 +118,24 @@ once it serves.
 - `stop` sends that `start` SIGINT, as Ctrl-C would, and returns once it has
   ended, which takes until its apps have stopped: at most the grace period.
   It finds the right process in each worktree, as each has its own state.
-  With no `start` running, it exits 1.
+  It ends with ``Stopped `devenv start` (pid <pid>)``. With no `start`
+  running, it exits 1.
 - `restart` stops the running `start`, if any, then runs `start` itself, in
   the foreground: run it in the background like `start` and wait for
   `Ready:` again. It serves over Tailscale when given `--tailscale` or when
   the `start` it stopped did.
+- `restart` loads the config in its own environment: a variable given to
+  the `start` it replaces is not carried over. Give it again.
+- `restart --apps` keeps the services as they are and skips `compose.init`
+  and `setup`, so only the apps start again. It needs a stack that is up,
+  and refuses after `down` or before any `start` or `up`. Use the plain
+  `restart` when the services, their init jobs or `setup` have changed.
+- The `start` that `restart` replaces prints its closing
+  `Stopped (SIGINT): <apps>` line, and its apps' shutdown output, to its own
+  output, not to `restart`'s.
+- Once a running `start` is ready, `status` shows the `info` lines it
+  printed, as its environment made them. Before that, and with no `start`
+  running, `status` evaluates `info` itself.
 - A `start` stopped before its apps run, while starting the services say,
   ends at once, without the closing `Stopped` line.
 

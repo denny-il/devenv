@@ -104,6 +104,7 @@ function config(compose = ""): void {
     },
     env: ({ root, port, url, project, vars }) => ({ COMPOSE_SECRET: vars.SECRET, CONFIG: root + "/config.json", API_ORIGIN: "http://127.0.0.1:" + port("server.http"), WEB_URL: url("web"), STACK: project }),
     setup: [[${JSON.stringify(process.execPath)}, "-e", "require('fs').writeFileSync('setup.json', JSON.stringify(process.env))"]],
+    info: () => ({ Mode: process.env.MODE || "default" }),
     test: { command: [${JSON.stringify(process.execPath)}, "-e", "require('fs').writeFileSync('test.json', JSON.stringify(process.env)); process.exit(Number(process.argv[1] || 0))"] }
   };`,
   );
@@ -273,13 +274,60 @@ test("stop, restart and status find this worktree's running start", async () => 
   expect(state().launcher?.pid).toBe(second.child.pid);
 
   const closed = once(second.child, "close");
-  expect((await command("stop")).stdout).toContain(
-    `Stopping \`devenv start\` (pid ${second.child.pid})`,
+  const stopped = (await command("stop")).stdout;
+  expect(stopped).toContain(`Stopping \`devenv start\` (pid ${second.child.pid})`);
+  expect(stopped.trimEnd().split("\n").at(-1)).toBe(
+    `Stopped \`devenv start\` (pid ${second.child.pid})`,
   );
   expect((await closed)[0]).toBe(0);
   expect(state().launcher).toBeUndefined();
   expect((await command("status")).stdout).toContain("No `devenv start` is running");
   await portsAreFree(Object.values(ports).flatMap((app) => Object.values(app.ports)));
+});
+
+test("status shows the info lines of the running start, not its own", async () => {
+  config();
+  env.MODE = "watch";
+  const run = start("start");
+  await ready();
+  await expect.poll(run.output).toContain("Mode: watch");
+  delete env.MODE;
+  // Recorded just after it is printed.
+  await expect.poll(async () => (await command("status")).stdout).toContain("Mode: watch");
+
+  const closed = once(run.child, "close");
+  await command("stop");
+  await closed;
+  expect((await command("status")).stdout).toContain("Mode: default");
+});
+
+test("restart --apps keeps the services and skips setup", async () => {
+  config('compose: { files: ["compose.yml"] },');
+  env.ALLOW_DOCKER = "1";
+  await expect(command("restart", "--apps")).rejects.toThrow("The stack is not up");
+  const first = start("start");
+  await ready();
+  expect(existsSync(resolve(root, "setup.json"))).toBe(true);
+  const { services, apps } = state();
+  for (const file of ["setup.json", "server.json", "web.json", "worker.ready"])
+    rmSync(resolve(root, file));
+  rmSync(resolve(home, "docker.log"));
+
+  const second = start("restart", "--apps");
+  expect((await once(first.child, "close"))[0]).toBe(0);
+  await ready();
+  expect(state()).toMatchObject({ services, apps, launcher: { pid: second.child.pid } });
+  expect(existsSync(resolve(root, "setup.json"))).toBe(false);
+  expect(existsSync(resolve(home, "docker.log"))).toBe(false);
+
+  const closed = once(second.child, "close");
+  await command("stop");
+  await closed;
+  await command("down");
+  await expect(command("restart", "--apps")).rejects.toThrow("The stack is not up");
+  await expect(command("restart", "--apps", "--apps")).rejects.toThrow(
+    "`devenv restart` takes only `--tailscale` and `--apps`",
+  );
 });
 
 test("host-only test uses a fresh context, propagates failure, and leaves dev state alone", async () => {
