@@ -1,6 +1,6 @@
 {
   "name": "@denny-il/devenv",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "An isolated local development stack per worktree: Compose services, host apps, and HTTPS over Tailscale",
   "keywords": [],
   "license": "MIT",
