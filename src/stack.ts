@@ -344,8 +344,8 @@ async function runApps(config: Config, state: State, reservations: AppReservatio
   // The first stop reaches every app's group once; whatever is still
   // running in a group when the grace period is over is killed, even after
   // the app's command itself has exited. Always SIGINT, as Ctrl-C at a
-  // terminal sends: package managers' script runners report an app that
-  // SIGTERM ended as a failed command, and one that SIGINT ended as stopped.
+  // terminal sends, so a stop reaches the apps the same way whatever
+  // stopped the launcher.
   const stop = () => {
     if (stopping) return;
     stopping = true;

@@ -47,8 +47,10 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   a watcher. `devenv status` says whether `start` is running, and its PID.
 - **A stopped `start` ends with `Stopped (<signal>): <apps>`**, or
   `Stopped: <apps>` after an app exited, and exits 0 when stopped by a
-  signal. Lines a package manager prints after it, such as pnpm's
-  `[ELIFECYCLE] Command failed`, are wrapper noise, not a failure.
+  signal. Judge the stop by that exit status. pnpm 11 prints
+  `[ELIFECYCLE] Command failed` for every app it runs that is stopped, when
+  its script shell is dash, as on most Linux machines; with exit status 0
+  that is not a failure.
 - **`down` and `reset` leave a running `start`'s apps alone.** `devenv down`
   stops any services and marks the stack stopped, keeping data and app ports.
   `devenv reset` deletes

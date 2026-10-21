@@ -90,9 +90,8 @@ once it serves.
 ## How a stack stops
 
 - Ctrl-C, SIGTERM, a closed terminal or `devenv stop` sends one SIGINT to
-  every process of every app, whatever the launcher received: package
-  managers' script runners report an app that SIGTERM ended as a failed
-  command. What is still running
+  each app's process group, whatever the launcher received, as Ctrl-C at a
+  terminal would. What is still running
   in an app's process group ten seconds later is killed, even once the app's
   command has exited, so a server finishing its own cleanup is not cut
   short. A second signal kills at once.
@@ -101,7 +100,10 @@ once it serves.
 - Any app exiting stops the whole stack, with a line naming it.
 - Once every app has stopped, it prints `Stopped (<signal>): <apps>`, or
   `Stopped: <apps>` when an app stopped the stack, so the end of the output
-  states the outcome. Lines an app's wrapper prints after that are not.
+  states the outcome. pnpm 11 prints `[ELIFECYCLE] Command failed` for an
+  app it runs that is stopped, when its script shell is dash, as on most
+  Linux machines; pnpm 12 does not. When `start` exits 0, it is not a
+  failure.
 - `start` exits 0 when it was stopped by a signal, including during setup or
   while waiting for readiness, and otherwise with the exit status of the app
   that stopped the stack, or 1 for a failed start.

@@ -274,8 +274,8 @@ The functions get the stack as a context:
   says nothing about whether it answers yet. An app that exits before it
   is ready, or is not ready within its `timeout` (300 seconds unless
   given), fails the start and stops the stack.
-- **Stopping.** One SIGINT reaches every process of every app, once,
-  whatever stopped `start`, and `start` ends with
+- **Stopping.** Each app's process group gets one SIGINT, whatever stopped
+  `start`, and `start` ends with
   `Stopped (<signal>): <apps>`. `devenv stop` stops the worktree's running
   `start` from anywhere, and `devenv restart` starts it again. Ten
   seconds later, what is still running in an app's process group is
