@@ -56,8 +56,8 @@ npx skills add ./node_modules/@denny-il/devenv
 | Command                             | What it does                                                                    |
 | ----------------------------------- | ------------------------------------------------------------------------------- |
 | `devenv up`                         | Prepares this worktree's stack and app ports; starts any services.              |
-| `devenv dev`                        | Starts the services, runs `setup`, then runs every app until one stops.         |
-| `devenv dev --tailscale`            | The same, with the apps served to this machine's tailnet over HTTPS.            |
+| `devenv start`                      | Starts the services, runs `setup`, then runs every app until one stops.         |
+| `devenv start --tailscale`          | The same, with the apps served to this machine's tailnet over HTTPS.            |
 | `devenv status`                     | Shows the services and the app URLs.                                            |
 | `devenv run -- <command>`           | Runs a command with the stack's environment.                                    |
 | `devenv test [-- <args>]`           | Runs the tests on a fresh stack of their own, always removed afterwards.        |
@@ -68,6 +68,9 @@ npx skills add ./node_modules/@denny-il/devenv
 | `devenv setup [docker] [tailscale]` | Installs Docker and Tailscale on this machine, and sets them up.                |
 | `devenv tailnet info`               | Shows this machine's tailnet name and what keeps it from serving, if anything.  |
 | `devenv tailnet serve`              | Serves the given local ports to the tailnet until stopped, without any project. |
+
+`devenv start` was `devenv dev` before 0.5.0. `devenv dev` now fails with a
+message naming `start`: update package scripts and notes that run it.
 
 ## Setting up a machine
 
@@ -95,7 +98,8 @@ A project adapts to the launcher, not the other way around.
   The launcher names the Compose project, and starts only the services
   outside of profiles.
 - **Apps.** Each is a command that takes its ports from its environment and
-  listens on `127.0.0.1`.
+  listens on `127.0.0.1`: a dev server, or a command that builds and then
+  serves the build. Each app picks its own; one stack can mix both.
 - **Environment.** One function from the stack to the variables every app and
   command gets, on top of the root `.env`. A git worktree without a `.env`
   gets the main checkout's.
@@ -134,11 +138,11 @@ export default defineConfig({
 });
 ```
 
-`dev` runs setup and apps as usual; `dev --tailscale` serves the public app
+`start` runs setup and apps as usual; `start --tailscale` serves the public app
 ports and keeps internal ones private. `up` assigns and remembers ports
 without launching apps, so `run` can use the environment. `status` reports
 those URLs, not app liveness. `down` marks the stack stopped and keeps its
-ports; `reset` removes its state. Stop the foreground `dev` process to stop
+ports; `reset` removes its state. Stop the foreground `start` process to stop
 its apps; `down` and `reset` manage stack state and any Compose resources,
 not another terminal's app processes. App data in host files is left to the
 project to manage.
@@ -156,7 +160,7 @@ If the state is unreadable, its mode is unknown: `reset` attempts Docker
 cleanup by name. When Docker is unavailable, it resets local state and warns
 that the named project may still have containers or volumes to remove.
 
-A config with only `compose.test` files keeps `dev`, `up`, `status`, `list`
+A config with only `compose.test` files keeps `start`, `up`, `status`, `list`
 and `down` independent of Docker. `test`, `reset` and orphan pruning still
 need Docker to manage its test stacks. Removing the test files does not
 block host apps: saved cleanup metadata is kept until `reset`, so abandoned
@@ -190,7 +194,7 @@ export default defineConfig({
     },
   },
 
-  // Started by `dev` in this order.
+  // Started by `start` in this order, without waiting for one another.
   apps: {
     api: {
       command: "pnpm --filter api dev",
@@ -206,6 +210,8 @@ export default defineConfig({
     web: {
       command: "pnpm --filter web dev",
       env: (ports) => ({ HOST: "127.0.0.1", PORT: ports.http }),
+      // Optional: `start` reports the stack ready once this answers.
+      ready: { path: "/" },
     },
   },
 
@@ -218,7 +224,7 @@ export default defineConfig({
     COOKIE_PREFIX: project,
   }),
 
-  // Run by `dev` once the services are up, before the apps.
+  // Run by `start` once the services are up, before the apps.
   setup: ["pnpm database migrate", "pnpm database seed"],
 
   test: {
@@ -230,7 +236,7 @@ export default defineConfig({
     compose: { env: { POSTGRES_PASSWORD: "test" } },
   },
 
-  // Printed under the URLs by `dev` and `status`.
+  // Printed under the URLs by `start` and `status`.
   info: () => ({ "Sign-in": "admin@shop.local / admin" }),
 });
 ```
@@ -247,7 +253,7 @@ The functions get the stack as a context:
 | `vars`                       | The Compose variables as the stack uses them.                      |
 | `project`                    | The stack's Compose project name.                                  |
 | `root`                       | The project root.                                                  |
-| `tailnet`                    | This machine's tailnet name, under `dev --tailscale`.              |
+| `tailnet`                    | This machine's tailnet name, under `start --tailscale`.            |
 
 ## How a stack behaves
 
@@ -258,9 +264,19 @@ The functions get the stack as a context:
   `~/.local/state/devenv/stacks/<project>.json` (under `$XDG_STATE_HOME` when
   that is set), not in the checkout. So the credentials are in no workspace,
   and a stack can still be found after its checkout is gone.
-- **Stopping.** One signal stops every app and whatever each started; what
-  has not stopped ten seconds later is killed. Any app stopping stops the
-  stack.
+- **Readiness.** The apps start in order without waiting for one another.
+  An app with `ready` counts as ready once its port accepts a connection,
+  or, with a `path`, answers it over HTTP with a status below 400. `start`
+  prints the URLs once every such app is ready, and before that only that
+  it is waiting. An app without `ready` is reported as started, which
+  says nothing about whether it answers yet. An app that exits before it
+  is ready, or is not ready within its `timeout` (300 seconds unless
+  given), fails the start and stops the stack.
+- **Stopping.** One signal reaches every process of every app, once. Ten
+  seconds later, what is still running in an app's process group is
+  killed, even when the app's command itself has already exited: a server
+  that is stopping a build it started gets the whole ten seconds. Any app
+  stopping stops the stack.
 - **Tests.** Each run has a Compose project of its own, removed when the run
   ends, on Ctrl-C too, with the images built for it. A run that was killed
   outright is cleaned up by the next one, or by `reset`.
@@ -270,7 +286,7 @@ The functions get the stack as a context:
 
 ## Tailscale
 
-`devenv dev --tailscale` serves every app port that is not `internal` as
+`devenv start --tailscale` serves every app port that is not `internal` as
 `https://<machine>.<tailnet>.ts.net:<port>`. Those are the app URLs for the
 run, on this machine too.
 

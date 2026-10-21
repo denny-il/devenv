@@ -17,8 +17,23 @@ export interface PortOptions {
   internal?: boolean;
 }
 
+export interface ReadyCheck {
+  /** The port to try, by name; may be left out for an app with one port. */
+  port?: string;
+  /**
+   * Asks for this path over HTTP, ready on a status below 400. Without it,
+   * the app is ready once its port accepts a connection.
+   */
+  path?: string;
+  /** Seconds before the app counts as failed to start; 300 unless given. */
+  timeout?: number;
+}
+
 export interface AppConfig {
-  /** Started in the project root, in a process group of its own. */
+  /**
+   * Started in the project root, in a process group of its own. A command
+   * that builds first and then serves is still one command.
+   */
   command: Command;
   /** The ports the app listens on, by name. One named `http` unless given. */
   ports?: Record<string, PortOptions>;
@@ -27,12 +42,18 @@ export interface AppConfig {
    * `env`. The app must listen on `127.0.0.1`.
    */
   env?: (ports: Record<string, number>, context: Context) => EnvValues;
+  /**
+   * How `start` tells the app answers, before it reports the stack ready.
+   * `true` waits for the app's one port to accept connections. Without it,
+   * the app counts as started once its command runs.
+   */
+  ready?: boolean | ReadyCheck;
 }
 
 export interface ComposeConfig {
   /** The Compose files of every mode, relative to the project root. */
   files: string[];
-  /** Added for `up` and `dev`. */
+  /** Added for `up` and `start`. */
   dev?: string[];
   /** Added for `test`. */
   test?: string[];
@@ -60,7 +81,7 @@ export interface TestConfig {
   compose?: {
     /**
      * Variables for the Compose files of the test stack alone, on top of
-     * `compose.env`: a `dev` stack neither gets them nor counts them among
+     * `compose.env`: a `start` stack neither gets them nor counts them among
      * what it was created with.
      */
     env?: EnvValues;
@@ -72,17 +93,17 @@ export interface Config {
   name: string;
   /** Omit for host-only apps. Empty file lists also need no Docker. */
   compose?: ComposeConfig;
-  /** Started by `dev` in this order. */
+  /** Started by `start` in this order, without waiting for one another. */
   apps?: Record<string, AppConfig>;
   /**
    * The environment of every app and command, on top of the root `.env`, or
    * the main checkout's in a git worktree that has none.
    */
   env?: (context: Context) => EnvValues;
-  /** Run by `dev` once the services are up, before the apps start. */
+  /** Run by `start` once the services are up, before the apps start. */
   setup?: Command[];
   test?: TestConfig;
-  /** Lines `dev` and `status` print under the URLs, such as a seeded login. */
+  /** Lines `start` and `status` print under the URLs, such as a seeded login. */
   info?: (context: Context) => Record<string, string>;
 }
 

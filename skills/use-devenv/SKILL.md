@@ -14,13 +14,19 @@ ports, containers or data.
 The project describes itself in `devenv.config.ts` at its root. The CLI is
 `devenv`. Projects usually wrap it in a package script, so check
 `package.json` first and use that form (`"local": "devenv"` means
-`pnpm local dev`).
+`pnpm local start`).
 
 ## Working in a project that uses it
 
-- **Start the stack with `devenv dev`.** It starts the services, runs the
+- **Start the stack with `devenv start`.** It starts the services, runs the
   project's setup commands, then runs every app until one stops. It does not
-  return, so run it in the background and read its output.
+  return, so run it in the background and read its output. It was called
+  `devenv dev` before 0.5.0; a script that still runs that fails and names
+  `start`.
+- **Wait for the stack before using it.** Apps with a readiness check are
+  ready once `Ready: <apps>` is printed, with the URLs after it. Apps listed
+  under `Started, without a readiness check` may not answer yet: wait for
+  their own "listening" line, or poll the URL.
 - **Take URLs and ports from what it prints**, or from `devenv status`. They
   are assigned per worktree and differ between checkouts, so a port written
   into code, a script or a test breaks for the next worktree.
@@ -29,9 +35,9 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   apps get, so nothing has to be copied out of the state file.
 - **Run configured tests with `devenv test [-- <args>]`.** Each run gets
   fresh services when configured and removes them afterwards; host-only tests
-  need no Docker. The `dev` stack and
+  need no Docker. The `start` stack and
   its data are not touched.
-- **Stop the foreground `dev` process to stop its apps.** `devenv down`
+- **Stop the foreground `start` process to stop its apps.** `devenv down`
   stops any services and marks the stack stopped, keeping data and app ports.
   `devenv reset` deletes
   this worktree's volumes, built images and state; run it before deleting a
@@ -58,8 +64,8 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
 
 Omit `compose`, or use `compose: { files: [] }` without overlays, when every
 app runs on the host. No dummy service or Docker installation is needed.
-`dev`, `up`, `status`, `run`, `test`, `down` and `reset` keep their usual
-port and environment behavior. `dev --tailscale` also works; use `url()`
+`start`, `up`, `status`, `run`, `test`, `down` and `reset` keep their usual
+port and environment behavior. `start --tailscale` also works; use `url()`
 for the browser-facing URLs and `port()` for loopback connections.
 `status` shows assigned URLs, not whether apps are listening. `list` reports
 host app stacks as `ready` or `stopped`. `list` needs Docker for dev stacks
@@ -70,7 +76,7 @@ An older state without the host-only marker is still a Compose state. Run
 `reset` before starting it with a host-only config; cleanup still needs
 Docker even after removing `compose` from that config.
 
-With only `compose.test` files, `dev`, `up`, `status`, `list` and `down`
+With only `compose.test` files, `start`, `up`, `status`, `list` and `down`
 need no Docker; `test`, `reset` and orphan pruning still do. Removing test
 Compose files leaves host apps usable and keeps cleanup metadata until
 `reset`. Without dev Compose volumes, variables refresh on each startup.
@@ -89,5 +95,5 @@ name whose Docker resources may need manual cleanup.
   what a project's Compose files and apps must look
   like, the steps to move a project onto the launcher, and what it
   deliberately does not do.
-- [Tailscale](references/tailscale.md) - `dev --tailscale`, `devenv setup`,
+- [Tailscale](references/tailscale.md) - `start --tailscale`, `devenv setup`,
   the one-time prerequisites, and what each failure message means.

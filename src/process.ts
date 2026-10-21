@@ -2,6 +2,9 @@ import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process"
 import { constants } from "node:os";
 import type { Command } from "./config.ts";
 
+/** How long a stopped process group has to end before it is killed. */
+export const stopGrace = 10_000;
+
 export interface RunOptions {
   cwd: string;
   env?: NodeJS.ProcessEnv;
@@ -63,9 +66,11 @@ export function run(command: Command, options: RunOptions): Promise<RunResult> {
       detached: detached || signal !== undefined,
     });
     let escalation: NodeJS.Timeout | undefined;
+    let deadline = 0;
     const abort = () => {
       signalGroup(child.pid, "SIGINT");
-      escalation = setTimeout(() => signalGroup(child.pid, "SIGKILL"), 10_000);
+      deadline = Date.now() + stopGrace;
+      escalation = setTimeout(() => signalGroup(child.pid, "SIGKILL"), stopGrace);
     };
     signal?.addEventListener("abort", abort, { once: true });
     let stdout = "";
@@ -97,9 +102,11 @@ export function run(command: Command, options: RunOptions): Promise<RunResult> {
         }
         resolveRun({ code: code ?? 1, signal: exitSignal, stdout, stderr });
       };
-      // What it started may outlive it, ignoring an interrupt or left
-      // running by a command that ended on its own.
-      if (signal) void reapGroup(child.pid).then(settle);
+      // What it started may outlive it: still stopping after the interrupt,
+      // which keeps its grace period, or left running by a command that
+      // ended on its own.
+      if (signal?.aborted) void settleGroup(child.pid, deadline).then(settle);
+      else if (signal) void reapGroup(child.pid).then(settle);
       else settle();
     });
   });
@@ -117,17 +124,35 @@ export function signalGroup(pid: number | undefined, signal: NodeJS.Signals | 0)
 }
 
 /**
- * Waits for the processes left in a child's group, such as servers a suite
- * started, to end, then ends them: none may outlive the stack they use.
+ * Waits for every process in the group `pid` leads to end, and kills those
+ * still running at `deadline` (in `Date.now()` time). No further signal is
+ * sent before then: a group already told to stop may be cleaning up, such as
+ * a server stopping the build it started, and a second signal often means
+ * "stop at once".
  */
-export async function reapGroup(pid: number | undefined): Promise<void> {
+export async function settleGroup(pid: number | undefined, deadline: number): Promise<void> {
+  while (signalGroup(pid, 0)) {
+    if (Date.now() >= deadline) {
+      signalGroup(pid, "SIGKILL");
+      // SIGKILL cannot be ignored, but exits take a moment. Bounded: a
+      // zombie nothing reaps would keep the group forever.
+      for (let attempt = 0; attempt < 10 && signalGroup(pid, 0); attempt += 1)
+        await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+      return;
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+}
+
+/**
+ * Ends the processes left in a child's group, such as servers a suite
+ * started: none may outlive the stack they use. They get SIGTERM, then
+ * `grace` milliseconds before they are killed.
+ */
+export async function reapGroup(pid: number | undefined, grace = 5_000): Promise<void> {
   if (!signalGroup(pid, 0)) return;
   signalGroup(pid, "SIGTERM");
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
-    if (!signalGroup(pid, 0)) return;
-  }
-  signalGroup(pid, "SIGKILL");
+  await settleGroup(pid, Date.now() + grace);
 }
 
 /** The shell's exit status for a child's exit. */

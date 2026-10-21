@@ -202,7 +202,7 @@ test.each([false, true])(
     config();
     await command("up");
     const earlier = state();
-    const dev = start("dev", ...(tailscale ? ["--tailscale"] : []));
+    const dev = start("start", ...(tailscale ? ["--tailscale"] : []));
     await ready();
     const running = state();
     expect(running.apps).toEqual(earlier.apps);
@@ -241,7 +241,7 @@ test.each([false, true])(
 
 test("an app failure stops its sibling and descendant with the same exit status", async () => {
   config();
-  const dev = start("dev");
+  const dev = start("start");
   await ready();
   const running = state();
   const closed = once(dev.child, "close");
@@ -402,7 +402,7 @@ test("test-only Compose configs keep dev/up/status/list/down independent of Dock
   expect(state().hostOnly).toBeUndefined();
   expect((await command("status")).stdout).toContain("http://localhost:");
   expect((await command("list")).stdout).toContain("ready");
-  const dev = start("dev");
+  const dev = start("start");
   await ready();
   const closed = once(dev.child, "close");
   dev.child.kill("SIGTERM");
@@ -440,7 +440,7 @@ test("removing dev Compose files requires cleanup even when test Compose files r
 
 test("Tailscale teardown preserves Docker cleanup recorded by a concurrent test run", async () => {
   config();
-  const dev = start("dev", "--tailscale");
+  const dev = start("start", "--tailscale");
   await ready();
   config('compose: { files: [], test: ["compose.test.yml"] },');
   env.ALLOW_DOCKER = "1";

@@ -1,6 +1,6 @@
 # Tailscale and machine setup
 
-## `devenv dev --tailscale`
+## `devenv start --tailscale`
 
 Serves every app port that is not `internal` as
 `https://<machine>.<tailnet>.ts.net:<port>`, with the same port number as
@@ -12,12 +12,13 @@ locally. The apps keep listening on `127.0.0.1`; Tailscale forwards to them.
   cookies and baked-in API URLs.
 - Serving starts before `setup` and the apps, so a missing permission or a
   port already served fails at once.
-- The entries exist only while `dev` runs. Nothing is left to clean up,
+- The entries exist only while `start` runs. Nothing is left to clean up,
   unless the launcher is killed outright (`kill -9`): then its apps and its
   `tailscale serve` processes keep running until they are stopped by hand.
 - The first request to a name can take about half a minute, while its
   certificate is issued.
-- Until an app has started, its URL answers 502.
+- Until an app listens, its URL answers 502. A `ready` check goes to the
+  app's local port, not through Tailscale.
 
 Everyone who can reach the machine on the tailnet, including users it is
 shared with, reaches the stack. Turn it on when the user asks for access from
