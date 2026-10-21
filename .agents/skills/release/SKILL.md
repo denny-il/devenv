@@ -22,9 +22,9 @@ failure before that is undone by restoring one file.
 
 ## Before starting
 
-- **The checkout is `main`, clean, and level with `origin`.** The publish
-  commands below skip pnpm's own Git checks, because the version change makes
-  the tree dirty on purpose, so check here:
+- **The checkout is `main`, clean, and level with `origin`.** The commands
+  below skip pnpm's own Git checks, because the version change makes the tree
+  dirty on purpose, so check here:
 
   ```sh
   git fetch origin
@@ -32,10 +32,23 @@ failure before that is undone by restoring one file.
   ```
 
   Anything else uncommitted would be published without being in Git. Stop and
-  ask the user.
+  ask the user. A change to what neither ships nor goes into the build, such
+  as the agents' own files under `.agents/`, can stay uncommitted if the user
+  wants to release with it in place: the release commit takes `package.json`
+  only. Not one under `src/` or to the TypeScript, package or lock files:
+  `dist/` is built from those as the package is packed.
 
-- **npm is signed in:** `pnpm whoami`. If it is not, ask the user to run
-  `pnpm login`. Do not sign in for them, and do not read or print `~/.npmrc`.
+- **npm is signed in:** `pnpm whoami`. If it is not, run `pnpm login` under
+  a pseudo-terminal, in the background, as the publish below:
+
+  ```sh
+  tail -f /dev/null | script -qfec "pnpm login" /tmp/devenv-login.log
+  ```
+
+  Give the user the link it prints: they sign in, in their own browser, and
+  the command ends once they have. If they ask for a new link, stop this run
+  by its process ID and start another; `pkill -f "pnpm login"` would also
+  match the shell that runs it. Do not read or print `~/.npmrc`.
 
 - **The version is agreed.** `pnpm view @denny-il/devenv version` shows the
   newest one published. A fix is a patch. Anything that changes what a project
@@ -46,7 +59,7 @@ failure before that is undone by restoring one file.
 ## Steps
 
 ```sh
-pnpm version <patch|minor|x.y.z> --no-git-tag-version
+pnpm version <patch|minor|x.y.z> --no-git-tag-version --no-git-checks
 pnpm publish --dry-run --no-git-checks
 ```
 
@@ -79,15 +92,14 @@ Once it has succeeded:
 
 ```sh
 version=$(node -p 'require("./package.json").version')
-git commit -am "chore: release $version"
+git commit package.json -m "chore: release $version"
 git tag "v$version"
 git push origin main "v$version"
 pnpm view @denny-il/devenv version
 ```
 
 The registry can take a minute or two to show a new version, and answers
-`Not found` or the old one until then. The `0.0.0-stage` in its list of
-versions is npm's own placeholder from the first publish, not a release.
+`Not found` or the old one until then.
 
 ## When a step fails
 
