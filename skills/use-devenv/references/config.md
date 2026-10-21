@@ -35,6 +35,7 @@ export default defineConfig({
     web: {
       command: "pnpm --filter web dev",
       env: (ports) => ({ HOST: "127.0.0.1", PORT: ports.http }),
+      ready: { path: "/" },
     },
   },
 
@@ -69,7 +70,7 @@ worktree. Build loopback origins with `port()` and public origins with
 `url()`.
 
 An empty base list with nonempty mode files still uses Compose in that mode.
-With only `compose.test` files, `dev`, `up`, `status`, `list` and `down` do
+With only `compose.test` files, `start`, `up`, `status`, `list` and `down` do
 not need Docker. `test`, `reset` and orphan pruning manage Docker resources.
 
 ## Fields
@@ -79,13 +80,13 @@ not need Docker. `test`, `reset` and orphan pruning manage Docker resources.
 | `name`             | Start of the stack names. Lowercase letters, digits, `-`, `_`.                   |
 | `compose`          | Optional Compose configuration; omitted for host-only stacks.                    |
 | `compose.files`    | Compose files of every mode, relative to the root.                               |
-| `compose.dev`      | Overlays added for `up` and `dev`.                                               |
+| `compose.dev`      | Overlays added for `up` and `start`.                                             |
 | `compose.test`     | Overlays added for `test`.                                                       |
 | `compose.init`     | Services that do a job and exit. Each runs to its end once the others are ready. |
 | `compose.env`      | Variables for the Compose files (`${POSTGRES_USER}`).                            |
-| `apps`             | The host apps, started by `dev` in this order.                                   |
+| `apps`             | The host apps, started by `start` in this order.                                 |
 | `env`              | A function from the stack to the variables every app and command gets.           |
-| `setup`            | Commands `dev` runs once the services are up, before the apps.                   |
+| `setup`            | Commands `start` runs once the services are up, before the apps.                 |
 | `test`             | `setup` commands, the test `command`, and extra `env` for `devenv test`.         |
 | `test.compose.env` | Variables for the Compose files of the test stack alone, over `compose.env`.     |
 | `info`             | A function returning lines to print under the URLs, such as a seeded sign-in.    |
@@ -112,6 +113,39 @@ environment, or `compose.env`, has it.
 - The app must listen on `127.0.0.1`. Set its host variable in the app's
   `env` instead of trusting a default or the root `.env`.
 
+## Apps and their commands
+
+- `command` is whatever runs the app: a dev server with a watcher, or a
+  command that builds and then serves the build. Each app chooses its own,
+  so one stack can mix a production preview with dev servers. There is no
+  mode setting; to switch an app, change its command.
+- Keep a build step in the app's command rather than in `setup`: the command
+  gets the app's `env` and ports, so URLs a build bakes in are the stack's.
+- Apps start in config order, each without waiting for the one before it.
+  There is no ordering between apps; an app that needs another must wait
+  for it itself.
+
+## Readiness
+
+`ready` is optional. Without it, an app counts as started once its command
+runs, and nothing waits for it.
+
+| Form                         | Ready once                                                 |
+| ---------------------------- | ---------------------------------------------------------- |
+| `ready: true`                | The app's one port accepts a TCP connection.               |
+| `ready: { port: "proxy" }`   | That port accepts a connection; needed with several ports. |
+| `ready: { path: "/health" }` | `GET` on that path answers with a status below 400.        |
+| `ready: { timeout: 600 }`    | As above, with 600 seconds to get there instead of 300.    |
+
+- The check goes to `127.0.0.1` on the app's port, never through Tailscale.
+- `start` prints the URLs only once every app with a check is ready, so a
+  slow build delays them; an app that exits first, or runs out of time,
+  fails the start and stops the stack.
+- A port that accepts connections before the app can answer (a proxy in
+  front of a server that is still building, say) is better checked with a
+  `path`.
+- A watcher's later rebuilds are not checked: readiness is about the start.
+
 ## The context
 
 `env`, `info` and each app's `env` (as its second argument) receive:
@@ -124,7 +158,7 @@ environment, or `compose.env`, has it.
 | `vars`                       | The Compose variables as the stack uses them.                      |
 | `project`                    | The stack's Compose project name, unique per worktree.             |
 | `root`                       | The project root.                                                  |
-| `tailnet`                    | This machine's tailnet name under `dev --tailscale`, else unset.   |
+| `tailnet`                    | This machine's tailnet name under `start --tailscale`, else unset. |
 
 - `service(name)` takes the service's name from the Compose file. Nothing
   about services is declared in the config: the launcher reads every published
@@ -144,7 +178,7 @@ environment, or `compose.env`, has it.
   including those with Compose-backed tests, refresh these variables on each
   startup until they first start dev Compose services.
 - **A variable only the test overlay reads belongs in `test.compose.env`.**
-  In `compose.env` it would change what the `dev` stack was created with and
+  In `compose.env` it would change what the `start` stack was created with and
   set off that warning. Under `test`, `vars` holds both.
 - **A test stack's images do not outlive the run.** What Compose builds for a
   test run is removed with it, so a service with `build:` and no `image:` is

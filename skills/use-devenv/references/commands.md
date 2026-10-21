@@ -14,7 +14,7 @@ This needs git 2.36 or newer.
 | Command                             | What it does                                                                         |
 | ----------------------------------- | ------------------------------------------------------------------------------------ |
 | `devenv up`                         | Starts the services and assigns the app ports.                                       |
-| `devenv dev [--tailscale]`          | Starts the services, runs `setup`, runs every app until one stops.                   |
+| `devenv start [--tailscale]`        | Starts the services, runs `setup`, runs every app until one stops.                   |
 | `devenv status`                     | Lists the containers, the app URLs and the project's `info` lines.                   |
 | `devenv run -- <command>`           | Runs a command with the stack's environment.                                         |
 | `devenv test [-- <args>]`           | Runs the tests on a fresh stack that is always removed.                              |
@@ -26,20 +26,23 @@ This needs git 2.36 or newer.
 | `devenv tailnet info [--json]`      | Prints this machine's tailnet name and what keeps it from serving.                   |
 | `devenv tailnet serve <port>…`      | Serves local ports to the tailnet over HTTPS until stopped.                          |
 
+`devenv dev`, the name of `start` before 0.5.0, now fails with a message
+naming `start`.
+
 ## Host-only stacks
 
 When `compose` is omitted, or all its file lists are empty, all stack commands
-skip Docker. `up` prepares app ports and enables `run`; `dev` runs setup and
+skip Docker. `up` prepares app ports and enables `run`; `start` runs setup and
 apps, including optional Tailscale serving. `status` prints assigned URLs,
 not app liveness. `down` marks the stack stopped while preserving ports;
-`reset` removes state, not files the apps wrote on the host. Stop `dev` with
+`reset` removes state, not files the apps wrote on the host. Stop `start` with
 a signal to stop its app processes; neither `down` nor `reset` stops apps
 owned by another launcher. `test` runs its setup and command with fresh
 ports and a separate context, without launching apps or services.
 
 `list` reports host-only stacks as `ready` (environment prepared) or
 `stopped`. It and `prune` skip Docker when only host-only states are involved.
-With only `compose.test` files, the dev stack is still host-only: `dev`,
+With only `compose.test` files, the dev stack is still host-only: `start`,
 `up`, `status`, `list` and `down` skip Docker. `test`, `reset` and orphan
 pruning need Docker for the test resources. Removing the test files keeps
 host apps usable without Docker; saved cleanup metadata remains until
@@ -53,7 +56,7 @@ warns which project may still have containers or volumes to remove.
 
 ## How a stack starts
 
-`dev` does these in order, and stops at the first that fails:
+`start` does these in order, and stops at the first that fails:
 
 1. Starts any Compose services and waits until each is healthy.
 2. Runs any `compose.init` services, each to its end.
@@ -61,41 +64,61 @@ warns which project may still have containers or volumes to remove.
    are free.
 4. With `--tailscale`, serves the app ports to the tailnet.
 5. Runs the `setup` commands.
-6. Starts the apps in config order and prints the URLs.
+6. Starts the apps in config order, each without waiting for the one
+   before it.
+7. Waits until every app with a `ready` check answers, then prints
+   `Ready: <apps>`, `Started, without a readiness check: <apps>` for the
+   others, and the URLs.
 
-The URLs are printed as soon as the apps are started, which is before they
-answer. Wait for an app's own "listening" line, or poll its URL.
+While it waits, it prints `Waiting for <apps> to be ready` and no URLs. An
+app without a check is only known to have started: it may still be building
+or compiling. Wait for its own "listening" line, or poll its URL.
+
+An app with a check fails the start when it exits before it is ready, or is
+not ready within its timeout. Either stops the stack with a message naming
+the app; the exit status is the app's (1 if that was 0), or 1 after a
+timeout.
+
+An app that builds and then serves, such as a production preview, stays one
+command: it builds with the app's environment, so URLs baked into the build
+are the stack's. Give it a `ready` check so the stack is reported ready only
+once it serves.
 
 ## How a stack stops
 
-- Ctrl-C, SIGTERM or a closed terminal stops every app and whatever each
-  started. What has not stopped ten seconds later is killed. A second signal
-  kills at once.
-- Any app exiting stops the whole stack.
-- `dev` exits 0 when it was stopped by a signal, and otherwise with the exit
-  status of the app that stopped the stack.
-- Any Compose services keep running after `dev` ends. `down` stops them.
+- Ctrl-C, SIGTERM or a closed terminal sends one signal to every process
+  of every app (SIGINT for Ctrl-C, SIGTERM otherwise). What is still running
+  in an app's process group ten seconds later is killed, even once the app's
+  command has exited, so a server finishing its own cleanup is not cut
+  short. A second signal kills at once.
+- A process an app moved into a process group of its own is the app's to
+  stop; the launcher reaches only the app's group.
+- Any app exiting stops the whole stack, with a line naming it.
+- `start` exits 0 when it was stopped by a signal, including during setup or
+  while waiting for readiness, and otherwise with the exit status of the app
+  that stopped the stack, or 1 for a failed start.
+- Any Compose services keep running after `start` ends. `down` stops them.
   The prepared environment remains usable by `run` until `down` or `reset`.
 
 ## `run`
 
-- Needs a started stack: run `up` or `dev` first. After `down` it refuses.
+- Needs a started stack: run `up` or `start` first. After `down` it refuses.
 - The command gets the environment from the project's `env` function, on top
   of the root `.env`, with `node_modules/.bin` of the root on `PATH`.
-- It does not get an app's own `env` (its port, say); that belongs to `dev`.
+- It does not get an app's own `env` (its port, say); that belongs to `start`.
 - The exit status is the command's.
 
 ## `test`
 
 - Uses the base Compose files plus the `test` overlay, under a Compose project
-  made for this run. `dev` and `test` can run at the same time.
+  made for this run. `start` and `test` can run at the same time.
 - Runs `test.setup`, then `test.command`. Arguments after `--` are added to a
   plain command; a function command receives them and decides.
 - The stack is removed on success, failure and Ctrl-C, with the images
   Compose built for it; the next run builds them again from the build cache.
   A run that was killed outright is cleaned up by the next `devenv test` in
   the same worktree, by `reset`, or, once the checkout is gone, by `prune` if
-  the checkout had a `dev` stack.
+  the checkout had a `start` stack.
 - The exit status is the test command's, or 130 after Ctrl-C.
 
 ## `list` and `prune`

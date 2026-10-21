@@ -1,6 +1,6 @@
 import { dirname } from "node:path";
 import { findConfig, findEnvFile, loadConfig } from "./config.ts";
-import { type Project, createProject, dev, down, runCommand, status, test, up } from "./stack.ts";
+import { type Project, createProject, down, runCommand, start, status, test, up } from "./stack.ts";
 import { setup } from "./setup.ts";
 import { list, prune } from "./stacks.ts";
 import { info, serve } from "./tailnet.ts";
@@ -9,9 +9,9 @@ const usage = `Usage: devenv <command>
 
 Commands:
   up                       Prepare app ports and start any services
-  dev [--tailscale]        Start services, run setup, and run the apps; with
-                           --tailscale they are served to this machine's
-                           Tailscale network over HTTPS
+  start [--tailscale]      Start services, run setup, and run the apps until
+                           one stops; with --tailscale they are served to
+                           this machine's Tailscale network over HTTPS
   status                   Show this worktree's services and app URLs
   run -- <command>         Run a command with this worktree's environment
   test [-- <args>]         Run the tests on a fresh, throwaway stack that is
@@ -55,10 +55,10 @@ export async function main(argv: string[]): Promise<void> {
       noArguments(command, args);
       await up(await loadProject());
       break;
-    case "dev":
+    case "start":
       if (args.length > 1 || (args.length === 1 && args[0] !== "--tailscale"))
-        throw new Error("`devenv dev` takes only `--tailscale`");
-      await dev(await loadProject(), { tailscale: args.length === 1 });
+        throw new Error("`devenv start` takes only `--tailscale`");
+      await start(await loadProject(), { tailscale: args.length === 1 });
       break;
     case "status":
       noArguments(command, args);
@@ -105,6 +105,9 @@ export async function main(argv: string[]): Promise<void> {
     case undefined:
       console.log(usage);
       break;
+    // Its name until 0.5.0: say what replaced it rather than that it is unknown.
+    case "dev":
+      throw new Error("`devenv dev` is now `devenv start`");
     default:
       throw new Error(`Unknown command: ${command}\n\n${usage}`);
   }

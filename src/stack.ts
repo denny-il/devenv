@@ -22,7 +22,17 @@ import {
   testProjectPrefix,
 } from "./names.ts";
 import { type AppReservations, reserveAppPorts } from "./ports.ts";
-import { type Exit, exitStatus, reapGroup, run, signalGroup, spawnCommand } from "./process.ts";
+import {
+  type Exit,
+  exitStatus,
+  reapGroup,
+  run,
+  settleGroup,
+  signalGroup,
+  spawnCommand,
+  stopGrace,
+} from "./process.ts";
+import { readyProbe, waitUntilReady } from "./ready.ts";
 import { type State, readState, removeState, statePath, writeState } from "./state.ts";
 import { createServing, tailnetHost } from "./tailnet.ts";
 
@@ -126,7 +136,7 @@ export async function up(project: Project): Promise<void> {
   const started = await startStack(project, earlier);
   const reservations = await reserveAppPorts(project.config.apps ?? {}, earlier?.apps);
   await reservations.releaseAll();
-  // Ports the stack already has stay, free or not: a `dev` running in
+  // Ports the stack already has stay, free or not: a `start` running in
   // another terminal is what holds them, and its URLs must not change
   // under it. For the same reason its tailnet name stays.
   const apps: State["apps"] = {};
@@ -149,8 +159,8 @@ export async function up(project: Project): Promise<void> {
   console.log(`State: ${statePath(project.name)}`);
 }
 
-/** `devenv dev`: services, setup, then every app until one stops. */
-export async function dev(project: Project, options: { tailscale: boolean }): Promise<void> {
+/** `devenv start`: services, setup, then every app until one stops. */
+export async function start(project: Project, options: { tailscale: boolean }): Promise<void> {
   const { root, config } = project;
   // Over Tailscale the apps listen on this machine only, as ever: their
   // ports are served to the tailnet over HTTPS under this machine's name
@@ -187,12 +197,28 @@ export async function dev(project: Project, options: { tailscale: boolean }): Pr
   }
 }
 
-/** Runs setup and then the apps of a started stack, until one stops. */
+/** How an exit reads in a message. */
+function describeExit({ code, signal }: Exit): string {
+  return signal ? `signal ${signal}` : `exit code ${code}`;
+}
+
+/**
+ * Runs setup and then the apps of a started stack, until one stops. The
+ * apps start one after another without waiting for each other; the stack is
+ * reported ready once every app with a readiness check answers.
+ */
 async function runApps(config: Config, state: State, reservations: AppReservations): Promise<void> {
   const { root, tailnet } = state;
   const apps = Object.entries(config.apps ?? {});
   const context = createContext(state);
   const environment = createEnvironment(config, context);
+  // Before anything runs: a check on a port the app lacks is a config error.
+  const probes = new Map(
+    apps.flatMap(([name, app]) => {
+      const probe = readyProbe(name, app, context);
+      return probe ? [[name, probe] as const] : [];
+    }),
+  );
 
   const served = apps.flatMap(([app, { ports = defaultPorts }]) =>
     Object.keys(ports)
@@ -201,24 +227,29 @@ async function runApps(config: Config, state: State, reservations: AppReservatio
   );
   const serving = tailnet && served.length ? createServing(tailnet) : undefined;
   const children: { child: ChildProcess; closed: Promise<void> }[] = [];
+  const waits: Promise<void>[] = [];
+  const ready = new Set<string>();
   const controller = new AbortController();
   let stopping = false;
   let interrupted = false;
-  // The exit of the app that stopped the stack, if one did.
-  let cause: Exit | undefined;
+  // The exit status of the app that stopped the stack, if one did.
+  let cause: number | undefined;
   let escalation: NodeJS.Timeout | undefined;
+  let deadline = 0;
   const signalChildren = (signal: NodeJS.Signals) => {
     for (const { child } of children) signalGroup(child.pid, signal);
   };
-  // The first stop reaches every app's group; whatever has not stopped 10
-  // seconds later is killed.
+  // The first stop reaches every app's group once; whatever is still
+  // running in a group when the grace period is over is killed, even after
+  // the app's command itself has exited.
   const stop = (signal: NodeJS.Signals = "SIGTERM") => {
     if (stopping) return;
     stopping = true;
     controller.abort();
     serving?.stop();
     signalChildren(signal);
-    escalation = setTimeout(() => signalChildren("SIGKILL"), 10_000);
+    deadline = Date.now() + stopGrace;
+    escalation = setTimeout(() => signalChildren("SIGKILL"), stopGrace);
     escalation.unref();
   };
   const onSignal = (signal: NodeJS.Signals) => {
@@ -276,12 +307,20 @@ async function runApps(config: Config, state: State, reservations: AppReservatio
         stdio: "inherit",
         detached: true,
       });
+      const probe = probes.get(name);
       children.push({
         child,
         // Any app stopping stops the stack.
         closed: new Promise((resolveClosed) => {
           const closed = (exit: Exit) => {
-            if (!stopping) cause = exit;
+            if (!stopping) {
+              // One that never answered failed to start, whatever its status.
+              const early = probe && !ready.has(name);
+              cause = early ? exitStatus(exit) || 1 : exitStatus(exit);
+              console.error(
+                `${name} exited${early ? " before it was ready" : ""} (${describeExit(exit)}); stopping the stack`,
+              );
+            }
             stop();
             resolveClosed();
           };
@@ -292,24 +331,45 @@ async function runApps(config: Config, state: State, reservations: AppReservatio
           child.once("close", (code, signal) => closed({ code, signal }));
         }),
       });
+      if (probe)
+        waits.push(
+          waitUntilReady(probe, controller.signal).then((result) => {
+            if (result === "ready") ready.add(name);
+            if (typeof result !== "object" || stopping) return;
+            failure ??= new Error(
+              `${name} was not ready within ${probe.timeout / 1000} second${probe.timeout === 1000 ? "" : "s"}: at ${probe.path === undefined ? `127.0.0.1:${probe.port}` : `http://127.0.0.1:${probe.port}${probe.path}`}, ${result.timeout}; stopped the stack`,
+            );
+            stop();
+          }),
+        );
     }
-    if (!stopping) printStack(config, context);
+    if (probes.size && !stopping)
+      console.log(`Waiting for ${[...probes.keys()].join(", ")} to be ready`);
+    await Promise.all(waits);
+    if (!stopping) {
+      const unchecked = apps.map(([name]) => name).filter((name) => !probes.has(name));
+      if (probes.size) console.log(`Ready: ${[...probes.keys()].join(", ")}`);
+      if (unchecked.length)
+        console.log(`Started, without a readiness check: ${unchecked.join(", ")}`);
+      printStack(config, context);
+    }
   } catch (error) {
     if (!interrupted) failure ??= error;
     stop();
   }
 
   await Promise.all(children.map(({ closed }) => closed));
+  // What an app started may outlive its command, and is still within the
+  // grace period: a shell's server, say, that is waiting for its own
+  // children. Nothing may keep holding the app's port.
+  await Promise.all(children.map(({ child }) => settleGroup(child.pid, deadline)));
   clearTimeout(escalation);
-  // What an app started may outlive its command; nothing may keep holding
-  // its port.
-  await Promise.all(children.map(({ child }) => reapGroup(child.pid)));
   serving?.stop();
   await serving?.closed();
   for (const signal of stopSignals) process.off(signal, onSignal);
 
   if (failure) throw failure;
-  if (cause && !interrupted) process.exitCode = exitStatus(cause);
+  if (cause !== undefined && !interrupted) process.exitCode = cause;
 }
 
 /** `devenv status` */
@@ -330,7 +390,12 @@ export async function status(project: Project): Promise<void> {
   }
   console.log(`State: ${statePath(project.name)}`);
   if (state.stopped) console.log("The stack is stopped.");
-  else printStack(project.config, createContext(state));
+  else {
+    // The state cannot tell whether a launcher is running the apps.
+    if (Object.keys(project.config.apps ?? {}).length)
+      console.log("The apps answer here while `devenv start` runs them:");
+    printStack(project.config, createContext(state));
+  }
 }
 
 /** `devenv down`, and `devenv reset` with `removeVolumes`. */
@@ -480,7 +545,7 @@ export function testCommand(
  * `devenv test`: runs the test command against a stack of its own, fresh
  * services under a project name for this run alone, on ports Docker assigns,
  * and always removed afterwards, with the images built for it: a name per run
- * would otherwise leave an image per run. The worktree's `dev` stack and its
+ * would otherwise leave an image per run. The worktree's `start` stack and its
  * data are never touched.
  */
 export async function test(project: Project, args: string[]): Promise<void> {
@@ -516,6 +581,7 @@ export async function test(project: Project, args: string[]): Promise<void> {
   let interrupted: NodeJS.Signals | undefined;
   let tests: ChildProcess | undefined;
   let escalation: NodeJS.Timeout | undefined;
+  let deadline = 0;
   const interrupt = (signal: NodeJS.Signals) => {
     if (interrupted) return;
     interrupted = signal;
@@ -527,6 +593,7 @@ export async function test(project: Project, args: string[]): Promise<void> {
     if (tests) {
       const { pid } = tests;
       signalGroup(pid, signal);
+      deadline = Date.now() + 15_000;
       escalation = setTimeout(() => signalGroup(pid, "SIGKILL"), 15_000);
     }
   };
@@ -578,7 +645,10 @@ export async function test(project: Project, args: string[]): Promise<void> {
       child.once("close", (code, signal) => resolveExit({ code, signal }));
     });
     clearTimeout(escalation);
-    await reapGroup(child.pid);
+    // Interrupted, what is left of the group keeps the rest of its grace
+    // period, with no second signal.
+    if (interrupted) await settleGroup(child.pid, deadline);
+    else await reapGroup(child.pid);
     // A signal during the teardown has nothing left to stop.
     tests = undefined;
     result = exitStatus(interrupted ? { code: null, signal: interrupted } : exit);

@@ -10,11 +10,11 @@ is what has to be true of the project, then the steps to get there.
 If there are no container dependencies, omit `compose` from the config (or
 use `compose: { files: [] }` with no overlays). Skip the Compose adoption
 steps below. Configure host apps and their environment directly; Docker is
-not needed. `up` still assigns ports for `run`, and `dev --tailscale` works.
+not needed. `up` still assigns ports for `run`, and `start --tailscale` works.
 
 **Compose files (when needed)**
 
-- A base file with the services, plus one overlay for `dev` and, if tests need
+- A base file with the services, plus one overlay for `start` and, if tests need
   services, one for `test`.
 - Services publish on loopback ports that Docker assigns. In the overlays:
 
@@ -48,19 +48,23 @@ not needed. `up` still assigns ports for `run`, and `dev --tailscale` works.
   `127.0.0.1`.
 - Each app reads the URLs of the other apps and services from the
   environment, with no fallback to a fixed local port.
+- An app may run a dev server, or build and then serve; each app's command
+  decides. A command that builds must leave nothing running that it does
+  not stop itself within the ten seconds the launcher gives a stopped app.
 
 ## Steps
 
 1. Install it as a dev dependency, as described under
    [Installing the package](#installing-the-package), and add a script:
    `"local": "devenv"`.
-2. Move published ports out of the base Compose file into the `dev` overlay,
+2. Move published ports out of the base Compose file into the `compose.dev` overlay,
    as loopback ports Docker assigns. Add healthchecks.
 3. Write `devenv.config.ts`: `name`, optional `compose`, then `env` built from
    `service(...)` and `vars`. Run `devenv up` and `devenv status`; fix until
    the services start and `devenv run -- <a migration or query>` works.
 4. Add the apps one at a time, each with the variables that set its port and
-   host. Run `devenv dev` and open the printed URLs.
+   host, and a `ready` check where startup takes a while. Run
+   `devenv start` and open the printed URLs.
 5. Move migration and seed commands into `setup`.
 6. If tests need services, add the `test` overlay and section and run
    `devenv test`.
