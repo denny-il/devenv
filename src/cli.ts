@@ -1,6 +1,17 @@
 import { dirname } from "node:path";
 import { findConfig, findEnvFile, loadConfig } from "./config.ts";
-import { type Project, createProject, down, runCommand, start, status, test, up } from "./stack.ts";
+import {
+  type Project,
+  createProject,
+  down,
+  restart,
+  runCommand,
+  start,
+  status,
+  stop,
+  test,
+  up,
+} from "./stack.ts";
 import { setup } from "./setup.ts";
 import { list, prune } from "./stacks.ts";
 import { info, serve } from "./tailnet.ts";
@@ -12,7 +23,12 @@ Commands:
   start [--tailscale]      Start services, run setup, and run the apps until
                            one stops; with --tailscale they are served to
                            this machine's Tailscale network over HTTPS
-  status                   Show this worktree's services and app URLs
+  stop                     Stop this worktree's running \`start\` and wait
+                           until its apps have stopped
+  restart [--tailscale]    Stop this worktree's running \`start\`, if any,
+                           and start again in its place
+  status                   Show this worktree's services, app URLs, and
+                           whether \`start\` is running
   run -- <command>         Run a command with this worktree's environment
   test [-- <args>]         Run the tests on a fresh, throwaway stack that is
                            always removed
@@ -56,9 +72,16 @@ export async function main(argv: string[]): Promise<void> {
       await up(await loadProject());
       break;
     case "start":
+    case "restart":
       if (args.length > 1 || (args.length === 1 && args[0] !== "--tailscale"))
-        throw new Error("`devenv start` takes only `--tailscale`");
-      await start(await loadProject(), { tailscale: args.length === 1 });
+        throw new Error(`\`devenv ${command}\` takes only \`--tailscale\``);
+      await (command === "start" ? start : restart)(await loadProject(), {
+        tailscale: args.length === 1,
+      });
+      break;
+    case "stop":
+      noArguments(command, args);
+      await stop(await loadProject());
       break;
     case "status":
       noArguments(command, args);

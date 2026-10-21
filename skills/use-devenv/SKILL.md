@@ -20,7 +20,8 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
 
 - **Start the stack with `devenv start`.** It starts the services, runs the
   project's setup commands, then runs every app until one stops. It does not
-  return, so run it in the background and read its output. It was called
+  return, so run it in the background and read its output. Its first line
+  is `Stack <name> (pid <pid>)`. It was called
   `devenv dev` before 0.5.0; a script that still runs that fails and names
   `start`.
 - **Wait for the stack before using it.** Apps with a readiness check are
@@ -37,7 +38,18 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   fresh services when configured and removes them afterwards; host-only tests
   need no Docker. The `start` stack and
   its data are not touched.
-- **Stop the foreground `start` process to stop its apps.** `devenv down`
+- **Stop it with `devenv stop`, restart it with `devenv restart`.** `stop`
+  finds this worktree's running `start`, stops it as Ctrl-C would and waits
+  until its apps are gone, so it never touches another worktree's stack.
+  `restart` stops it and starts again in its place: run it in the background
+  like `start`, and wait for `Ready:` again. Use it after changes an app does
+  not pick up on its own, such as a build-and-serve app or a backend without
+  a watcher. `devenv status` says whether `start` is running, and its PID.
+- **A stopped `start` ends with `Stopped (<signal>): <apps>`**, or
+  `Stopped: <apps>` after an app exited, and exits 0 when stopped by a
+  signal. Lines a package manager prints after it, such as pnpm's
+  `[ELIFECYCLE] Command failed`, are wrapper noise, not a failure.
+- **`down` and `reset` leave a running `start`'s apps alone.** `devenv down`
   stops any services and marks the stack stopped, keeping data and app ports.
   `devenv reset` deletes
   this worktree's volumes, built images and state; run it before deleting a

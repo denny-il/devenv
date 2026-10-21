@@ -22,6 +22,18 @@ export interface State {
   tailnet?: string;
   /** The stack is stopped; app ports and any volumes and `composeEnv` remain. */
   stopped?: true;
+  /**
+   * The `devenv start` running the apps, while it runs. One killed outright
+   * leaves it behind, and its PID may since be another process's: it is
+   * that launcher only while a process of that PID started at `started`.
+   */
+  launcher?: Launcher;
+}
+
+export interface Launcher {
+  pid: number;
+  /** When it started, as `processStart` tells it. */
+  started: string;
 }
 
 /**
@@ -98,6 +110,12 @@ export function parseState(content: string, project: string): State {
     apps: portTable(value.apps),
     ...(typeof value.tailnet === "string" ? { tailnet: value.tailnet } : {}),
     ...(value.stopped === true ? { stopped: true as const } : {}),
+    ...(isRecord(value.launcher) &&
+    Number.isInteger(value.launcher.pid) &&
+    (value.launcher.pid as number) > 0 &&
+    typeof value.launcher.started === "string"
+      ? { launcher: { pid: value.launcher.pid as number, started: value.launcher.started } }
+      : {}),
   };
 }
 

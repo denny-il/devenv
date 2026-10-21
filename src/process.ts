@@ -155,6 +155,27 @@ export async function reapGroup(pid: number | undefined, grace = 5_000): Promise
   await settleGroup(pid, Date.now() + grace);
 }
 
+/**
+ * When process `pid` started, as `ps` tells it: with a PID, it tells one
+ * process from a later one given the same PID. Undefined once the process has
+ * ended, a zombie included, or when `ps` cannot tell.
+ */
+export async function processStart(cwd: string, pid: number): Promise<string | undefined> {
+  try {
+    const { code, stdout } = await run(["ps", "-o", "stat=", "-o", "lstart=", "-p", String(pid)], {
+      cwd,
+      // The same text for the same start whoever asks, whatever their locale.
+      env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
+      capture: true,
+      reject: false,
+    });
+    const [, stat, started] = /^\s*(\S+)\s+(.+?)\s*$/.exec(stdout) ?? [];
+    return code === 0 && stat && !stat.startsWith("Z") ? started : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** The shell's exit status for a child's exit. */
 export function exitStatus({ code, signal }: Exit): number {
   if (code !== null) return code;
