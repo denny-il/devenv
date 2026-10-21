@@ -250,6 +250,38 @@ test("an app failure stops its sibling and descendant with the same exit status"
   await portsAreFree(Object.values(running.apps).flatMap((app) => Object.values(app.ports)));
 });
 
+test("stop, restart and status find this worktree's running start", async () => {
+  config();
+  await expect(command("stop")).rejects.toThrow("No `devenv start` is running for this worktree");
+  const first = start("start");
+  await ready();
+  const { pid } = first.child;
+  expect(first.output()).toContain(`Stack ${projectName("fixture", root)} (pid ${pid})`);
+  expect((await command("status")).stdout).toContain(
+    `\`devenv start\` is running the apps (pid ${pid})`,
+  );
+  await expect(command("start")).rejects.toThrow(`already running this stack (pid ${pid})`);
+  await expect(command("reset")).rejects.toThrow("Stop it with `devenv stop` first");
+
+  const ports = state().apps;
+  for (const file of ["server.json", "web.json", "worker.ready"]) rmSync(resolve(root, file));
+  const second = start("restart");
+  expect((await once(first.child, "close"))[0]).toBe(0);
+  expect(first.output().trimEnd().split("\n").at(-1)).toBe("Stopped (SIGINT): server, web");
+  await ready();
+  expect(state().apps).toEqual(ports);
+  expect(state().launcher?.pid).toBe(second.child.pid);
+
+  const closed = once(second.child, "close");
+  expect((await command("stop")).stdout).toContain(
+    `Stopping \`devenv start\` (pid ${second.child.pid})`,
+  );
+  expect((await closed)[0]).toBe(0);
+  expect(state().launcher).toBeUndefined();
+  expect((await command("status")).stdout).toContain("No `devenv start` is running");
+  await portsAreFree(Object.values(ports).flatMap((app) => Object.values(app.ports)));
+});
+
 test("host-only test uses a fresh context, propagates failure, and leaves dev state alone", async () => {
   config();
   await command("up");

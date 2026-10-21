@@ -122,15 +122,16 @@ async function json(path: string, timeout = 10_000): Promise<Record<string, numb
 }
 
 // Like a build-then-serve tool: a helper in a process group of its own
-// that ignores SIGTERM, which the server stops itself, taking longer than
-// the five seconds the launcher once gave a group after its command exited.
+// that ignores SIGTERM, which the server stops itself on SIGINT, taking
+// longer than the five seconds the launcher once gave a group after its
+// command exited.
 const cleaningServer = `
 import { spawn } from "node:child_process";
 import { writeFileSync } from "node:fs";
 const helper = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore" });
 let signals = 0;
 writeFileSync("pids.json", JSON.stringify({ server: process.pid, helper: helper.pid }));
-process.on("SIGTERM", () => {
+process.on("SIGINT", () => {
   signals += 1;
   writeFileSync("signals.json", JSON.stringify({ signals }));
   if (signals > 1) return;
@@ -153,13 +154,16 @@ test("an app's group keeps the whole grace period after its shell exits, with on
   expect(await run.exited).toBe(0);
   expect(Date.now() - signaled).toBeGreaterThanOrEqual(5_500);
   expect(running(helper!)).toBe(false);
+  // SIGINT whatever stopped the launcher, as package script runners report
+  // an app that SIGTERM ended as a failure.
   expect(await json(join(base, "signals.json"))).toEqual({ signals: 1 });
+  expect(run.output().trimEnd().split("\n").at(-1)).toBe("Stopped (SIGTERM): api");
 }, 20_000);
 
 test("what ignores the stop is killed once the grace period is over", async () => {
   await project(`apps: { api: { command: "node stubborn.mjs" } }`, {
     "stubborn.mjs": `import { writeFileSync } from "node:fs";
-process.on("SIGTERM", () => {});
+process.on("SIGINT", () => {});
 writeFileSync("pids.json", JSON.stringify({ server: process.pid }));
 setInterval(() => {}, 1000);`,
   });

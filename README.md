@@ -58,7 +58,9 @@ npx skills add ./node_modules/@denny-il/devenv
 | `devenv up`                         | Prepares this worktree's stack and app ports; starts any services.              |
 | `devenv start`                      | Starts the services, runs `setup`, then runs every app until one stops.         |
 | `devenv start --tailscale`          | The same, with the apps served to this machine's tailnet over HTTPS.            |
-| `devenv status`                     | Shows the services and the app URLs.                                            |
+| `devenv stop`                       | Stops this worktree's running `start` and waits until its apps have stopped.    |
+| `devenv restart [--tailscale]`      | Stops this worktree's running `start`, if any, and starts again in its place.   |
+| `devenv status`                     | Shows the services, the app URLs, and whether `start` is running.               |
 | `devenv run -- <command>`           | Runs a command with the stack's environment.                                    |
 | `devenv test [-- <args>]`           | Runs the tests on a fresh stack of their own, always removed afterwards.        |
 | `devenv down`                       | Stops the services and keeps their volumes.                                     |
@@ -141,10 +143,10 @@ export default defineConfig({
 `start` runs setup and apps as usual; `start --tailscale` serves the public app
 ports and keeps internal ones private. `up` assigns and remembers ports
 without launching apps, so `run` can use the environment. `status` reports
-those URLs, not app liveness. `down` marks the stack stopped and keeps its
-ports; `reset` removes its state. Stop the foreground `start` process to stop
-its apps; `down` and `reset` manage stack state and any Compose resources,
-not another terminal's app processes. App data in host files is left to the
+those URLs and whether `start` is running, not whether each app answers.
+`down` marks the stack stopped and keeps its ports; `reset` removes its
+state. `devenv stop`, or a signal to `start`, stops its apps; `down` and
+`reset` manage stack state and any Compose resources, not the apps. App data in host files is left to the
 project to manage.
 
 `test` runs `test.setup` and `test.command` with fresh app ports and a
@@ -272,7 +274,10 @@ The functions get the stack as a context:
   says nothing about whether it answers yet. An app that exits before it
   is ready, or is not ready within its `timeout` (300 seconds unless
   given), fails the start and stops the stack.
-- **Stopping.** One signal reaches every process of every app, once. Ten
+- **Stopping.** Each app's process group gets one SIGINT, whatever stopped
+  `start`, and `start` ends with
+  `Stopped (<signal>): <apps>`. `devenv stop` stops the worktree's running
+  `start` from anywhere, and `devenv restart` starts it again. Ten
   seconds later, what is still running in an app's process group is
   killed, even when the app's command itself has already exited: a server
   that is stopping a build it started gets the whole ten seconds. Any app
