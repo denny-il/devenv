@@ -44,7 +44,12 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   `restart` stops it and starts again in its place: run it in the background
   like `start`, and wait for `Ready:` again. Use it after changes an app does
   not pick up on its own, such as a build-and-serve app or a backend without
-  a watcher. `devenv status` says whether `start` is running, and its PID.
+  a watcher. `restart --apps` keeps the services and skips `setup`, for
+  when only app code changed. `restart` reads the config in its own
+  environment, so give it again any variable the previous `start` got.
+  The replaced `start` prints its closing `Stopped (SIGINT): <apps>` line
+  to its own output, not `restart`'s. `devenv status` says whether `start`
+  is running, its PID and the `info` lines it printed.
 - **A stopped `start` ends with `Stopped (<signal>): <apps>`**, or
   `Stopped: <apps>` after an app exited, and exits 0 when stopped by a
   signal. Judge the stop by that exit status. pnpm 11 prints

@@ -34,6 +34,8 @@ export interface Launcher {
   pid: number;
   /** When it started, as `processStart` tells it. */
   started: string;
+  /** The `info` lines it prints, as its own environment made them. */
+  info?: Record<string, string>;
 }
 
 /**
@@ -114,7 +116,16 @@ export function parseState(content: string, project: string): State {
     Number.isInteger(value.launcher.pid) &&
     (value.launcher.pid as number) > 0 &&
     typeof value.launcher.started === "string"
-      ? { launcher: { pid: value.launcher.pid as number, started: value.launcher.started } }
+      ? {
+          launcher: {
+            pid: value.launcher.pid as number,
+            started: value.launcher.started,
+            ...(isRecord(value.launcher.info) &&
+            Object.values(value.launcher.info).every((item) => typeof item === "string")
+              ? { info: value.launcher.info as Record<string, string> }
+              : {}),
+          },
+        }
       : {}),
   };
 }

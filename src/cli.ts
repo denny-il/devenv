@@ -25,8 +25,10 @@ Commands:
                            this machine's Tailscale network over HTTPS
   stop                     Stop this worktree's running \`start\` and wait
                            until its apps have stopped
-  restart [--tailscale]    Stop this worktree's running \`start\`, if any,
-                           and start again in its place
+  restart [--tailscale] [--apps]
+                           Stop this worktree's running \`start\`, if any,
+                           and start again in its place; with --apps, keep
+                           the services and skip setup
   status                   Show this worktree's services, app URLs, and
                            whether \`start\` is running
   run -- <command>         Run a command with this worktree's environment
@@ -60,6 +62,8 @@ async function loadProject(): Promise<Project> {
   return createProject(root, await loadConfig(path));
 }
 
+const restartFlags = ["--tailscale", "--apps"];
+
 function noArguments(command: string, args: string[]): void {
   if (args.length) throw new Error(`\`devenv ${command}\` takes no arguments`);
 }
@@ -72,13 +76,20 @@ export async function main(argv: string[]): Promise<void> {
       await up(await loadProject());
       break;
     case "start":
-    case "restart":
       if (args.length > 1 || (args.length === 1 && args[0] !== "--tailscale"))
-        throw new Error(`\`devenv ${command}\` takes only \`--tailscale\``);
-      await (command === "start" ? start : restart)(await loadProject(), {
-        tailscale: args.length === 1,
+        throw new Error("`devenv start` takes only `--tailscale`");
+      await start(await loadProject(), { tailscale: args.length === 1 });
+      break;
+    case "restart": {
+      const flags = new Set(args);
+      if (flags.size !== args.length || [...flags].some((flag) => !restartFlags.includes(flag)))
+        throw new Error("`devenv restart` takes only `--tailscale` and `--apps`");
+      await restart(await loadProject(), {
+        tailscale: flags.has("--tailscale"),
+        apps: flags.has("--apps"),
       });
       break;
+    }
     case "stop":
       noArguments(command, args);
       await stop(await loadProject());
