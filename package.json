@@ -49,17 +49,17 @@
   "devEngines": {
     "packageManager": {
       "name": "pnpm",
-      "version": "12.10.1",
+      "version": "12.15.0",
       "onFail": "download"
     },
     "runtime": {
       "name": "node",
-      "version": "26.11.1",
+      "version": "26.12.1",
       "onFail": "download"
     }
   },
   "engines": {
     "node": ">=22.18.0"
   },
-  "packageManager": "pnpm@12.10.1"
+  "packageManager": "pnpm@12.15.0"
 }
