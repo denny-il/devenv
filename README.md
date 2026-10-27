@@ -63,7 +63,7 @@ npx skills add ./node_modules/@denny-il/devenv
 | `devenv status`                         | Shows the services, the app URLs, and whether `start` is running.               |
 | `devenv run -- <command>`               | Runs a command with the stack's environment.                                    |
 | `devenv test [-- <args>]`               | Runs the tests on a fresh stack of their own, always removed afterwards.        |
-| `devenv down`                           | Stops the services and keeps their volumes.                                     |
+| `devenv down`                           | Stops the services and keeps their named volumes.                               |
 | `devenv reset`                          | Stops the services and deletes this worktree's volumes, images and state.       |
 | `devenv list`                           | Shows every stack on this machine.                                              |
 | `devenv prune`                          | Removes the stacks whose checkout is gone, with their data.                     |
@@ -286,7 +286,8 @@ The functions get the stack as a context:
   stopping stops the stack.
 - **Tests.** Each run has a Compose project of its own, removed when the run
   ends, on Ctrl-C too, with the images built for it. A run that was killed
-  outright is cleaned up by the next one, or by `reset`.
+  outright is cleaned up by the next one, or by `reset`, along with any
+  `compose.init` job it left running.
 - **`.env` in a worktree.** `.env` is not checked out, so a git worktree
   starts without one. Until it has its own, the main checkout's is loaded,
   and a line says so. An empty `.env` in the worktree turns that off.

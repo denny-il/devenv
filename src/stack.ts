@@ -8,10 +8,10 @@ import {
   compose,
   composeProjects,
   ensureDocker,
-  removal,
   removeProject,
   removeVolumesOf,
   startServices,
+  takeDown,
 } from "./compose.ts";
 import { type Command, type Config, type Context, defaultPorts, usesCompose } from "./config.ts";
 import { appPorts, createContext, createEnvironment, stringValues } from "./context.ts";
@@ -600,8 +600,7 @@ export async function down(project: Project, removeVolumes: boolean): Promise<vo
     }
   } else if (docker) await ensureDocker(project.root);
   if (docker) {
-    if (target.files.length)
-      await compose(target, removeVolumes ? removal : ["down", "--remove-orphans"]);
+    if (target.files.length) await takeDown(target, { keepVolumes: !removeVolumes });
     else await removeProject(project.name, { keepVolumes: !removeVolumes });
   }
   if (removeVolumes) {
@@ -840,7 +839,7 @@ export async function test(project: Project, args: string[]): Promise<void> {
   } finally {
     clearTimeout(escalation);
     try {
-      if (target.files.length) await compose(target, removal, { detached: true });
+      if (target.files.length) await takeDown(target, { detached: true });
     } catch (error) {
       console.error((error as Error).message);
       if (result === 0) result = 1;
