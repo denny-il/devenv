@@ -339,17 +339,16 @@ pnpm check && pnpm test
 `skills/use-devenv` describes the launcher to agents in the projects that use
 it. Change it together with the behaviour it describes.
 
-Releases are published from a checkout, not by CI. `pnpm publish` runs the
-checks and tests and builds `dist/`, which is not committed. The version is
-committed only once npm has the package, so a release that fails leaves
-nothing behind but a changed `package.json`:
+Releases are published by the `Publish` workflow, dispatched by hand on
+`main`, with npm trusted publishing. A release PR bumps the version first;
+the workflow checks that its input matches `package.json`, runs the checks
+and tests, builds `dist/` (which is not committed), publishes, and then tags
+the commit and creates its GitHub release. A rerun finishes a release that
+failed partway, and never publishes over another one:
 
 ```sh
-pnpm version patch --no-git-tag-version   # or minor
-pnpm publish --dry-run --no-git-checks
-pnpm publish --no-git-checks
-git commit -am "chore: release <version>" && git tag v<version>
-git push origin main v<version>
+pnpm version patch --no-git-tag-version   # or minor; merged in a PR
+gh workflow run publish.yml --ref main -f version=<version>
 ```
 
 `.agents/skills/release` gives an agent the same steps, with what to check

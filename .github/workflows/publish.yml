@@ -1,0 +1,103 @@
+name: Publish
+
+permissions:
+  contents: write
+  id-token: write # npm trusted publishing (OIDC)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish (must match package.json)
+        type: string
+        required: true
+      tag:
+        description: npm dist-tag to publish with
+        type: string
+        default: latest
+        required: false
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      DIST_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Check release inputs
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Publish from main, not $GITHUB_REF"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      # The release PR bumps package.json; the input only confirms the version,
+      # so the published package and its tag always match the tagged commit.
+      - name: Check version and tag
+        run: |
+          actual=$(node -p 'require("./package.json").version')
+          if [ "$VERSION" != "$actual" ]; then
+            echo "::error::Input version $VERSION does not match package.json $actual"
+            exit 1
+          fi
+          # An existing tag must point at this commit, so a rerun can only
+          # finish this release, never publish over another one. For annotated
+          # tags the peeled `^{}` line holds the commit.
+          refs=$(git ls-remote origin "refs/tags/v$VERSION" "refs/tags/v$VERSION^{}")
+          tagged=$(printf '%s\n' "$refs" | awk '$2 ~ /\^\{\}$/ { print $1 }')
+          [ -n "$tagged" ] || tagged=$(printf '%s\n' "$refs" | awk 'NF { print $1; exit }')
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::v$VERSION already points to $tagged, not $GITHUB_SHA"
+            exit 1
+          fi
+      # The runtime `devEngines` pins for local work.
+      - uses: pnpm/setup@v3
+        with:
+          runtime: node@26.12.1
+          install: false
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run check
+      - run: pnpm test
+      # `dist/` is not in Git, and `check` does not build it.
+      - run: pnpm run build
+
+      # Built and tested above, so lifecycle scripts (`prepublishOnly` reruns
+      # the checks and tests, `prepack` rebuilds) are skipped. A version that
+      # is already on npm is skipped too, so a rerun can finish the release.
+      - name: Dry-run publish and publish
+        run: |
+          if npm view "@denny-il/devenv@$VERSION" version >/dev/null 2>&1; then
+            echo "@denny-il/devenv@$VERSION is already published"
+            exit 0
+          fi
+          pnpm publish --dry-run --access public --no-git-checks --ignore-scripts --tag="$DIST_TAG"
+          pnpm publish --access public --no-git-checks --ignore-scripts --tag="$DIST_TAG"
+
+      - name: Publish GitHub release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // The tag was checked against this commit before publishing.
+            const tag = `v${process.env.VERSION}`
+            const { owner, repo } = context.repo
+            try {
+              await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` })
+            } catch (error) {
+              if (error.status !== 404) throw error
+              await github.rest.git.createRef({ owner, repo, ref: `refs/tags/${tag}`, sha: context.sha })
+            }
+            try {
+              await github.rest.repos.getReleaseByTag({ owner, repo, tag })
+              core.info(`Release ${tag} already exists`)
+            } catch (error) {
+              if (error.status !== 404) throw error
+              await github.rest.repos.createRelease({
+                owner,
+                repo,
+                tag_name: tag,
+                name: tag,
+                draft: false,
+                prerelease: false,
+                generate_release_notes: true
+              })
+            }
