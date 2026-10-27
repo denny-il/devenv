@@ -20,7 +20,7 @@ This needs git 2.36 or newer.
 | `devenv status`                         | Lists the containers, whether `start` runs, the app URLs and the `info` lines.       |
 | `devenv run -- <command>`               | Runs a command with the stack's environment.                                         |
 | `devenv test [-- <args>]`               | Runs the tests on a fresh stack that is always removed.                              |
-| `devenv down`                           | Stops the services; keeps volumes, credentials and app ports.                        |
+| `devenv down`                           | Stops the services; keeps named volumes, credentials and app ports.                  |
 | `devenv reset`                          | Removes containers, volumes, built images, the state, and killed test runs' stacks.  |
 | `devenv list`                           | Shows every stack on this machine.                                                   |
 | `devenv prune [--yes]`                  | Removes the stacks whose checkout is gone, with their data.                          |
@@ -107,7 +107,8 @@ once it serves.
 - `start` exits 0 when it was stopped by a signal, including during setup or
   while waiting for readiness, and otherwise with the exit status of the app
   that stopped the stack, or 1 for a failed start.
-- Any Compose services keep running after `start` ends. `down` stops them.
+- Any Compose services keep running after `start` ends. `down` stops them
+  and removes their anonymous volumes, which no later container gets back.
   The prepared environment remains usable by `run` until `down` or `reset`.
 
 ## `stop` and `restart`
@@ -155,9 +156,10 @@ once it serves.
   plain command; a function command receives them and decides.
 - The stack is removed on success, failure and Ctrl-C, with the images
   Compose built for it; the next run builds them again from the build cache.
-  A run that was killed outright is cleaned up by the next `devenv test` in
-  the same worktree, by `reset`, or, once the checkout is gone, by `prune` if
-  the checkout had a `start` stack.
+  A run that was killed outright, with any `compose.init` job it left
+  running, is cleaned up by the next `devenv test` in the same worktree, by
+  `reset`, or, once the checkout is gone, by `prune` if the checkout had a
+  `start` stack.
 - The exit status is the test command's, or 130 after Ctrl-C.
 
 ## `list` and `prune`

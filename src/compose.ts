@@ -83,7 +83,51 @@ export function compose(
  * the project, under whatever name, and it finds them, like the rest, by the
  * project's label: this works on a project whose Compose files are gone.
  */
-export const removal = ["down", "--remove-orphans", "--volumes", "--rmi", "local"];
+const removal = ["down", "--remove-orphans", "--volumes", "--rmi", "local"];
+
+type TakeDownOptions = Pick<RunOptions, "detached"> & { keepVolumes?: boolean };
+
+/**
+ * Stops and removes the containers and networks of `target`'s project and,
+ * unless `keepVolumes`, its volumes and built images too.
+ */
+export async function takeDown(
+  target: ComposeTarget,
+  options: TakeDownOptions = {},
+): Promise<void> {
+  const { keepVolumes, ...runOptions } = options;
+  const { root, project } = target;
+  // A `run` container whose client was killed, the `compose.init` job of a
+  // launcher killed outright, runs on: `down` passes over it, and over the
+  // network and images it holds, and still succeeds.
+  const { stdout } = await run(
+    [
+      "docker",
+      "ps",
+      "--all",
+      "--quiet",
+      "--filter",
+      `label=com.docker.compose.project=${project}`,
+      "--filter",
+      "label=com.docker.compose.oneoff=True",
+    ],
+    { ...runOptions, cwd: root, capture: true },
+  );
+  const oneOffs = stdout.split("\n").filter((line) => line.trim());
+  // One that ends meanwhile, removed by its own `--rm`, fails here harmlessly.
+  if (oneOffs.length)
+    await run(["docker", "rm", "--force", "--volumes", ...oneOffs], {
+      ...runOptions,
+      cwd: root,
+      capture: true,
+      reject: false,
+    });
+  // Anonymous volumes go with their containers even when volumes are kept:
+  // no later container gets them back, and, unlabelled, nothing could find
+  // them to remove afterwards, `reset` included.
+  if (keepVolumes) await compose(target, ["rm", "--stop", "--force", "--volumes"], runOptions);
+  await compose(target, keepVolumes ? ["down", "--remove-orphans"] : removal, runOptions);
+}
 
 /**
  * Removes all of `project` by its name alone: its Compose files may be gone,
@@ -91,19 +135,11 @@ export const removal = ["down", "--remove-orphans", "--volumes", "--rmi", "local
  * the variables that name files, as a project's `.env` may: with no file
  * named Compose reads one it finds where it runs, or is pointed at.
  */
-export async function removeProject(
-  project: string,
-  options: Pick<RunOptions, "detached"> & { keepVolumes?: boolean } = {},
-): Promise<void> {
-  const { keepVolumes, ...runOptions } = options;
+export async function removeProject(project: string, options: TakeDownOptions = {}): Promise<void> {
   const empty = await mkdtemp(resolve(tmpdir(), "devenv-"));
   const { COMPOSE_FILE: _files, COMPOSE_ENV_FILES: _envFiles, ...env } = process.env;
   try {
-    await compose(
-      { root: empty, project, files: [], env },
-      keepVolumes ? ["down", "--remove-orphans"] : removal,
-      runOptions,
-    );
+    await takeDown({ root: empty, project, files: [], env }, options);
   } finally {
     await rm(empty, { recursive: true, force: true });
   }
