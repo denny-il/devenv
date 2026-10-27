@@ -1,119 +1,80 @@
 ---
 name: release
-description: "Use when asked to release or publish a new version of @denny-il/devenv to npm, or to bump its version. Gives the order that leaves nothing behind when a step fails, what needs the user (the version, npm sign-in, the second factor), and how to recover from a failed step."
+description: "Use when asked to release or publish a new version of @denny-il/devenv to npm, or to bump its version. Gives the order of the release PR and the `Publish` workflow, what needs the user (the version, merging), and how to recover from a failed run."
 ---
 
 # Release @denny-il/devenv
 
-Releases go to npm from a checkout of this repository; there is no CI. A
-published version is public and can be neither replaced nor taken back, so
-release only when the user asked for one, with a version they named or agreed
-to.
+Releases go to npm from the `Publish` workflow
+(`.github/workflows/publish.yml`), dispatched by hand on `main`. It
+publishes with npm trusted publishing, so no npm sign-in or second factor is
+needed. A published version is public and can be neither replaced nor taken
+back, so release only when the user asked for one, with a version they named
+or agreed to.
 
 ## The order
 
-1. Set the version in the working tree, uncommitted.
-2. Dry-run the publish.
-3. Publish.
-4. Commit, tag and push.
+1. Bump the version in a release PR, and merge it.
+2. Dispatch the workflow on `main` with that version.
+3. Check that npm and GitHub have the release.
 
-Nothing is committed or pushed until npm has accepted the package, so a
-failure before that is undone by restoring one file.
+The workflow refuses a version that does not match `package.json` on `main`,
+or whose tag points at another commit, so it can only publish what the
+release PR merged.
 
 ## Before starting
-
-- **The checkout is `main`, clean, and level with `origin`.** The commands
-  below skip pnpm's own Git checks, because the version change makes the tree
-  dirty on purpose, so check here:
-
-  ```sh
-  git fetch origin
-  git status --short --branch   # expect only: ## main...origin/main
-  ```
-
-  Anything else uncommitted would be published without being in Git. Stop and
-  ask the user. A change to what neither ships nor goes into the build, such
-  as the agents' own files under `.agents/`, can stay uncommitted if the user
-  wants to release with it in place: the release commit takes `package.json`
-  only. Not one under `src/` or to the TypeScript, package or lock files:
-  `dist/` is built from those as the package is packed.
-
-- **npm is signed in:** `pnpm whoami`. If it is not, run `pnpm login` under
-  a pseudo-terminal, in the background, as the publish below:
-
-  ```sh
-  tail -f /dev/null | script -qfec "pnpm login" /tmp/devenv-login.log
-  ```
-
-  Give the user the link it prints: they sign in, in their own browser, and
-  the command ends once they have. If they ask for a new link, stop this run
-  by its process ID and start another; `pkill -f "pnpm login"` would also
-  match the shell that runs it. Do not read or print `~/.npmrc`.
 
 - **The version is agreed.** `pnpm view @denny-il/devenv version` shows the
   newest one published. A fix is a patch. Anything that changes what a project
   relies on (the config, a command, an exit status) is a minor: before 1.0 a
   project's `^0.x.y` range takes patches only, so a minor is what a project
   has to opt into. If the user gave no version, propose one and ask.
+- **`main` has everything the release should ship**, and nothing it should
+  not: the workflow publishes `main` as it is.
 
 ## Steps
 
-```sh
-pnpm version <patch|minor|x.y.z> --no-git-tag-version --no-git-checks
-pnpm publish --dry-run --no-git-checks
-```
-
-The dry run runs the checks, the tests and the build, as the real publish
-does. Then:
+From an up-to-date `main`, on a new branch:
 
 ```sh
-pnpm publish --no-git-checks
+pnpm version <patch|minor|x.y.z> --no-git-tag-version
+version=$(node -p 'require("./package.json").version')
+git commit package.json -m "chore: release $version"
 ```
 
-npm asks for a second factor here, and pnpm will not ask for it in a shell
-that is not a terminal, as an agent's usually is not: it stops with
-`ERR_PNPM_OTP_NON_INTERACTIVE`, having published nothing. Then either:
+Push it, open a PR titled `chore: release <version>`, and merge it as the
+user asked (squash). Then:
 
-- **The user has a one-time code:** run the publish again with `--otp <code>`.
-- **Otherwise, run it under a pseudo-terminal**, in the background, with its
-  output in a file:
-
-  ```sh
-  tail -f /dev/null | script -qfec "pnpm publish --no-git-checks" /tmp/devenv-publish.log
-  ```
-
-  It prints `Authenticate your account at:` with a link, and waits. Give the
-  user the link and wait for the command to end; `Published package` in the
-  file means npm accepted it. Do not press ENTER for it: that opens a browser
-  on this machine. This is the `script` of Linux; the one on macOS takes its
-  arguments in another order.
+```sh
+gh workflow run publish.yml --ref main -f version="$version"
+gh run list --workflow publish.yml --limit 1   # its ID
+gh run watch <id> --exit-status
+```
 
 Once it has succeeded:
 
 ```sh
-version=$(node -p 'require("./package.json").version')
-git commit package.json -m "chore: release $version"
-git tag "v$version"
-git push origin main "v$version"
 pnpm view @denny-il/devenv version
+gh release view "v$version"
 ```
 
 The registry can take a minute or two to show a new version, and answers
 `Not found` or the old one until then.
 
-## When a step fails
+## When a run fails
 
-- **Before the publish succeeded:** `git restore package.json`. Nothing was
-  committed, pushed or published. Fix the cause and start again.
-- **After the publish succeeded:** the version is on npm for good. Do not
-  restore anything; fix what stopped the commit or the push and finish
-  step 4, so the repository has the commit the release was made from.
-- **npm says the version exists:** it was released already. Restore
-  `package.json` and take the next version.
+- **Before the publish step:** nothing was published or tagged. Fix the cause
+  on `main` with a PR, keeping the version, and dispatch again.
+- **At or after the publish step:** dispatch again with the same version. A
+  version already on npm is skipped, and the tag and release are created if
+  missing, so a rerun finishes the release.
+- **The version is already on npm from another commit, or its tag points
+  elsewhere:** it was released already. Bump to the next version in a new
+  release PR.
 
 ## Never
 
-- `--force`, or `npm unpublish`: a version that projects may have installed
-  does not change or disappear.
-- `--ignore-scripts`: it skips the build, and `dist/` is not in Git, so the
-  package would ship without its code.
+- `npm unpublish`, or deleting and moving a release tag: a version that
+  projects may have installed does not change or disappear.
+- Publishing from a checkout: the published package would carry no
+  provenance, and `main` would not be what was released.
