@@ -10,8 +10,10 @@ locally. The apps keep listening on `127.0.0.1`; Tailscale forwards to them.
   the config returns them, so apps are configured with the tailnet origins.
   One run uses one host name: mixing `localhost` and the tailnet name breaks
   cookies and baked-in API URLs.
-- Serving starts before `setup` and the apps, so a missing permission or a
-  port already served fails at once.
+- Serving starts before the apps, so a missing permission or a port already
+  served fails at once.
+- `setup` is run by `up`, not `start`, and gets the local URLs: it reaches
+  the services and apps on this machine, whatever serves them.
 - The entries exist only while `start` runs. Nothing is left to clean up,
   unless the launcher is killed outright (`kill -9`): then its apps and its
   `tailscale serve` processes keep running until they are stopped by hand.

@@ -10,7 +10,8 @@ is what has to be true of the project, then the steps to get there.
 If there are no container dependencies, omit `compose` from the config (or
 use `compose: { files: [] }` with no overlays). Skip the Compose adoption
 steps below. Configure host apps and their environment directly; Docker is
-not needed. `up` still assigns ports for `run`, and `start --tailscale` works.
+not needed. `up` still assigns ports for `run` and runs `setup`, and
+`start --tailscale` works.
 
 **Compose files (when needed)**
 
@@ -65,7 +66,7 @@ not needed. `up` still assigns ports for `run`, and `start --tailscale` works.
 4. Add the apps one at a time, each with the variables that set its port and
    host, and a `ready` check where startup takes a while. Run
    `devenv start` and open the printed URLs.
-5. Move migration and seed commands into `setup`.
+5. Move migration and seed commands into `setup`, and run `devenv up`.
 6. If tests need services, add the `test` overlay and section and run
    `devenv test`.
 7. Replace the project's old instructions (fixed ports, manual

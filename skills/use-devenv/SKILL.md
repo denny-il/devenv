@@ -16,14 +16,25 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
 `package.json` first and use that form (`"local": "devenv"` means
 `pnpm local start`).
 
+A stack has two parts. `devenv up` prepares it: it starts the services, which
+keep running under Docker until `devenv down`, and runs the project's setup
+commands, then returns. `devenv start` runs the apps in the foreground, and
+they stop when it does.
+
 ## Working in a project that uses it
 
-- **Start the stack with `devenv start`.** It starts the services, runs the
-  project's setup commands, then runs every app until one stops. It does not
-  return, so run it in the background and read its output. Its first line
-  is `Stack <name> (pid <pid>)`. It was called
-  `devenv dev` before 0.5.0; a script that still runs that fails and names
-  `start`.
+- **Prepare the stack with `devenv up`.** It starts any Compose services,
+  runs their `compose.init` jobs and the project's `setup` commands
+  (migrations, seeds), then returns. Run it once in a new checkout, and again
+  after pulling or changing migrations, services or `setup`, and after a
+  reboot. It is safe to run while the apps run.
+- **Run the apps with `devenv start`.** It runs every app until one stops,
+  and refuses with "run `devenv up` first" when the stack is not up. It does
+  not return, so run it in the background and read its output. Its first
+  line is `Stack <name> (pid <pid>)`. The apps belong to that process: when
+  it is stopped or killed, a background task that times out included, the
+  apps stop with it, and the services keep running. Start it again with
+  `devenv start`.
 - **Wait for the stack before using it.** Apps with a readiness check are
   ready once `Ready: <apps>` is printed, with the URLs after it. Apps listed
   under `Started, without a readiness check` may not answer yet: wait for
@@ -38,28 +49,27 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   fresh services when configured and removes them afterwards; host-only tests
   need no Docker. The `start` stack and
   its data are not touched.
-- **Stop it with `devenv stop`, restart it with `devenv restart`.** `stop`
-  finds this worktree's running `start`, stops it as Ctrl-C would and waits
-  until its apps are gone, so it never touches another worktree's stack.
-  `restart` stops it and starts again in its place: run it in the background
-  like `start`, and wait for `Ready:` again. Use it after changes an app does
-  not pick up on its own, such as a build-and-serve app or a backend without
-  a watcher. `restart --apps` keeps the services and skips `setup`, for
-  when only app code changed. `restart` reads the config in its own
-  environment, so give it again any variable the previous `start` got.
-  The replaced `start` prints its closing `Stopped (SIGINT): <apps>` line
-  to its own output, not `restart`'s. `devenv status` says whether `start`
-  is running, its PID and the `info` lines it printed.
+- **Stop the apps with `devenv stop`; restart them with `devenv stop`, then
+  `devenv start`.** `stop` finds this worktree's running `start`, stops it as
+  Ctrl-C would and waits until its apps are gone, so it never touches another
+  worktree's stack, and the ports are free for the next `start`, which gets
+  the same URLs. With no `start` running it says so and exits 0. Restart the
+  apps after changes they do not pick up on their own, such as a
+  build-and-serve app or a backend without a watcher; run `devenv up` in
+  between when migrations, services or `setup` changed. The stopped `start`
+  prints its closing `Stopped (SIGINT): <apps>` line to its own output.
+  `devenv status` says whether `start` is running, its PID and the `info`
+  lines it printed. `devenv restart` was removed in 0.7.0.
 - **A stopped `start` ends with `Stopped (<signal>): <apps>`**, or
   `Stopped: <apps>` after an app exited, and exits 0 when stopped by a
   signal. Judge the stop by that exit status. pnpm 11 prints
   `[ELIFECYCLE] Command failed` for every app it runs that is stopped, when
   its script shell is dash, as on most Linux machines; with exit status 0
   that is not a failure.
-- **`down` and `reset` leave a running `start`'s apps alone.** `devenv down`
-  stops any services and marks the stack stopped, keeping data and app ports.
-  `devenv reset` deletes
-  this worktree's volumes, built images and state; run it before deleting a
+- **`down` and `reset` stop a running `start` first.** `devenv down` then
+  stops any services and marks the stack stopped, keeping data and app ports;
+  `devenv up` brings it back. `devenv reset` deletes this worktree's
+  containers, volumes, built images and state; run it before deleting a
   worktree, or its containers, volumes and images are left behind.
 - **Leave Docker Compose to the launcher.** It names the Compose project per
   worktree. A `docker compose down --volumes` typed by hand can hit another

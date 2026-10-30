@@ -86,7 +86,7 @@ not need Docker. `test`, `reset` and orphan pruning manage Docker resources.
 | `compose.env`      | Variables for the Compose files (`${POSTGRES_USER}`).                            |
 | `apps`             | The host apps, started by `start` in this order.                                 |
 | `env`              | A function from the stack to the variables every app and command gets.           |
-| `setup`            | Commands `start` runs once the services are up, before the apps.                 |
+| `setup`            | Commands `up` runs once the services are up, with local URLs.                    |
 | `test`             | `setup` commands, the test `command`, and extra `env` for `devenv test`.         |
 | `test.compose.env` | Variables for the Compose files of the test stack alone, over `compose.env`.     |
 | `info`             | A function returning lines to print under the URLs, such as a seeded sign-in.    |
