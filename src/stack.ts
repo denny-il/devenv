@@ -182,8 +182,24 @@ export async function up(project: Project): Promise<void> {
   // hand with `devenv run`.
   const { tailnet: _tailnet, ...local } = state;
   const environment = createEnvironment(project.config, createContext(local));
-  for (const command of project.config.setup ?? [])
-    await run(command, { cwd: project.root, env: environment });
+  // A stop reaches each step's process group, and waits for it to end, as
+  // it did under `start`: a migration must not go on after `up` is gone.
+  const controller = new AbortController();
+  let interrupted: NodeJS.Signals | undefined;
+  const interrupt = (signal: NodeJS.Signals) => {
+    interrupted ??= signal;
+    controller.abort();
+  };
+  for (const signal of stopSignals) process.on(signal, interrupt);
+  try {
+    for (const command of project.config.setup ?? [])
+      await run(command, { cwd: project.root, env: environment, signal: controller.signal });
+  } catch (error) {
+    if (interrupted) throw new Error(`Setup stopped (${interrupted})`, { cause: error });
+    throw error;
+  } finally {
+    for (const signal of stopSignals) process.off(signal, interrupt);
+  }
   console.log(`State: ${statePath(project.name)}`);
 }
 

@@ -100,7 +100,7 @@ export interface Config {
    * the main checkout's in a git worktree that has none.
    */
   env?: (context: Context) => EnvValues;
-  /** Run by `start` once the services are up, before the apps start. */
+  /** Run by `up` once the services are up, with the local app URLs. */
   setup?: Command[];
   test?: TestConfig;
   /** Lines `start` and `status` print under the URLs, such as a seeded login. */

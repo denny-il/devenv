@@ -356,6 +356,21 @@ test("status shows the info lines of the running start, not its own", async () =
   expect((await command("status")).stdout).toContain("Mode: default");
 });
 
+test("stopping up stops its setup step's process group", async () => {
+  writeFileSync(
+    resolve(root, "devenv.config.js"),
+    `export default { name: "fixture", setup: [[${JSON.stringify(process.execPath)}, "-e", "require('fs').writeFileSync('setup.pid', String(process.pid)); setInterval(() => {}, 1000)"]] };`,
+  );
+  const up = start("up");
+  await expect.poll(() => existsSync(resolve(root, "setup.pid"))).toBe(true);
+  const pid = Number(readFileSync(resolve(root, "setup.pid"), "utf8"));
+  const closed = once(up.child, "close");
+  up.child.kill("SIGTERM");
+  expect((await closed)[0]).toBe(1);
+  expect(up.output()).toContain("Setup stopped (SIGTERM)");
+  expect(() => process.kill(pid, 0)).toThrow();
+});
+
 test("host-only test uses a fresh context, propagates failure, and leaves dev state alone", async () => {
   config();
   await command("up");

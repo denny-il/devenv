@@ -232,7 +232,7 @@ export default defineConfig({
     COOKIE_PREFIX: project,
   }),
 
-  // Run by `start` once the services are up, before the apps.
+  // Run by `up` once the services are up.
   setup: ["pnpm database migrate", "pnpm database seed"],
 
   test: {
