@@ -11,36 +11,32 @@ This needs git 2.36 or newer.
 
 `list`, `prune`, `setup` and `tailnet` need no project.
 
-| Command                                 | What it does                                                                         |
-| --------------------------------------- | ------------------------------------------------------------------------------------ |
-| `devenv up`                             | Starts the services and assigns the app ports.                                       |
-| `devenv start [--tailscale]`            | Starts the services, runs `setup`, runs every app until one stops.                   |
-| `devenv stop`                           | Stops this worktree's running `start` and waits until it has ended.                  |
-| `devenv restart [--tailscale] [--apps]` | Stops this worktree's running `start`, if any, and starts again in its place.        |
-| `devenv status`                         | Lists the containers, whether `start` runs, the app URLs and the `info` lines.       |
-| `devenv run -- <command>`               | Runs a command with the stack's environment.                                         |
-| `devenv test [-- <args>]`               | Runs the tests on a fresh stack that is always removed.                              |
-| `devenv down`                           | Stops the services; keeps named volumes, credentials and app ports.                  |
-| `devenv reset`                          | Removes containers, volumes, built images, the state, and killed test runs' stacks.  |
-| `devenv list`                           | Shows every stack on this machine.                                                   |
-| `devenv prune [--yes]`                  | Removes the stacks whose checkout is gone, with their data.                          |
-| `devenv setup [docker] [tailscale]`     | Installs and sets up Docker and Tailscale on this machine; both unless one is named. |
-| `devenv tailnet info [--json]`          | Prints this machine's tailnet name and what keeps it from serving.                   |
-| `devenv tailnet serve <port>…`          | Serves local ports to the tailnet over HTTPS until stopped.                          |
+| Command                             | What it does                                                                         |
+| ----------------------------------- | ------------------------------------------------------------------------------------ |
+| `devenv up`                         | Starts the services, runs `compose.init`, assigns the app ports, runs `setup`.       |
+| `devenv start [--tailscale]`        | Runs every app of a stack that is up, until one stops.                               |
+| `devenv stop`                       | Stops this worktree's running `start`, if any, and waits until it has ended.         |
+| `devenv status`                     | Lists the containers, whether `start` runs, the app URLs and the `info` lines.       |
+| `devenv run -- <command>`           | Runs a command with the stack's environment.                                         |
+| `devenv test [-- <args>]`           | Runs the tests on a fresh stack that is always removed.                              |
+| `devenv down`                       | Stops `start`, then the services; keeps named volumes, credentials and app ports.    |
+| `devenv reset`                      | Stops `start`; removes containers, volumes, built images, the state, killed tests.   |
+| `devenv list`                       | Shows every stack on this machine.                                                   |
+| `devenv prune [--yes]`              | Removes the stacks whose checkout is gone, with their data.                          |
+| `devenv setup [docker] [tailscale]` | Installs and sets up Docker and Tailscale on this machine; both unless one is named. |
+| `devenv tailnet info [--json]`      | Prints this machine's tailnet name and what keeps it from serving.                   |
+| `devenv tailnet serve <port>…`      | Serves local ports to the tailnet over HTTPS until stopped.                          |
 
-`devenv dev`, the name of `start` before 0.5.0, now fails with a message
-naming `start`.
+`devenv restart` no longer exists; it fails with a message naming
+`devenv stop`, then `devenv start`.
 
 ## Host-only stacks
 
 When `compose` is omitted, or all its file lists are empty, all stack commands
-skip Docker. `up` prepares app ports and enables `run`; `start` runs setup and
-apps, including optional Tailscale serving. `status` prints assigned URLs,
-not app liveness. `down` marks the stack stopped while preserving ports;
-`reset` removes state, not files the apps wrote on the host. Stop `start` with
-`devenv stop` or a signal to stop its app processes; neither `down` nor
-`reset` stops them. `test` runs its setup and command with fresh
-ports and a separate context, without launching apps or services.
+skip Docker and otherwise behave as usual. `status` prints assigned URLs, not
+app liveness; `reset` removes state, not files the apps wrote on the host;
+`test` runs its setup and command with fresh ports, without launching apps or
+services.
 
 `list` reports host-only stacks as `ready` (environment prepared) or
 `stopped`. It and `prune` skip Docker when only host-only states are involved.
@@ -56,20 +52,37 @@ to host-only apps. Unreadable state has an unknown mode: `reset` attempts
 Docker cleanup by name. If Docker is unavailable, it resets local state and
 warns which project may still have containers or volumes to remove.
 
-## How a stack starts
+## How a stack is prepared
 
-`start` prints `Stack <name> (pid <pid>)`, then does these in order, and
-stops at the first that fails:
+`up` does these in order, stops at the first that fails, and returns:
 
 1. Starts any Compose services and waits until each is healthy.
 2. Runs any `compose.init` services, each to its end.
-3. Reserves a port for every app port, the same ones as last time while they
+3. Assigns a port to every app port, keeping those the stack already has.
+4. Runs the `setup` commands, with the local app URLs: `url()` returns
+   `http://localhost:<port>` even while a `start --tailscale` serves the
+   apps.
+
+Run it in a new checkout, after changes to the services, their init jobs or
+`setup` (pulled migrations, say), after `down`, and after a reboot, when
+Docker may not have started the containers again. Running it while `start`
+runs keeps the apps' ports and URLs. A failed setup step leaves the stack up,
+so `run` can be used to look into it, and `up` runs every step again.
+
+## How a stack starts
+
+`start` needs a stack that is up: before `up`, and after `down`, it refuses
+with "The stack is not up: run `devenv up` first". It neither starts nor
+checks the services, and does not run `setup`. It prints
+`Stack <name> (pid <pid>)`, then does these in order, and stops at the first
+that fails:
+
+1. Reserves a port for every app port, the same ones as last time while they
    are free.
-4. With `--tailscale`, serves the app ports to the tailnet.
-5. Runs the `setup` commands.
-6. Starts the apps in config order, each without waiting for the one
+2. With `--tailscale`, serves the app ports to the tailnet.
+3. Starts the apps in config order, each without waiting for the one
    before it.
-7. Waits until every app with a `ready` check answers, then prints
+4. Waits until every app with a `ready` check answers, then prints
    `Ready: <apps>`, `Started, without a readiness check: <apps>` for the
    others, and the URLs.
 
@@ -90,11 +103,10 @@ once it serves.
 ## How a stack stops
 
 - Ctrl-C, SIGTERM, a closed terminal or `devenv stop` sends one SIGINT to
-  each app's process group, whatever the launcher received, as Ctrl-C at a
-  terminal would. What is still running
-  in an app's process group ten seconds later is killed, even once the app's
-  command has exited, so a server finishing its own cleanup is not cut
-  short. A second signal kills at once.
+  each app's process group, as Ctrl-C at a terminal would. Ten seconds later
+  whatever is left in the group is killed, even after the app's command
+  exited, so a server finishing its own cleanup is not cut short. A second
+  signal kills at once.
 - A process an app moved into a process group of its own is the app's to
   stop; the launcher reaches only the app's group.
 - Any app exiting stops the whole stack, with a line naming it.
@@ -104,45 +116,47 @@ once it serves.
   app it runs that is stopped, when its script shell is dash, as on most
   Linux machines; pnpm 12 does not. When `start` exits 0, it is not a
   failure.
-- `start` exits 0 when it was stopped by a signal, including during setup or
-  while waiting for readiness, and otherwise with the exit status of the app
+- `start` exits 0 when it was stopped by a signal, including while waiting
+  for readiness, and otherwise with the exit status of the app
   that stopped the stack, or 1 for a failed start.
 - Any Compose services keep running after `start` ends. `down` stops them
   and removes their anonymous volumes, which no later container gets back.
-  The prepared environment remains usable by `run` until `down` or `reset`.
+  The prepared environment remains usable by `run`, and by the next
+  `start`, until `down` or `reset`.
 
-## `stop` and `restart`
+## `stop`, and restarting the apps
 
 - `start` records its PID in the stack's state, and `status` shows it while
   it runs. A second `start` for the same worktree refuses to run while one
-  is, and so does `reset`, which would leave its apps running unfound.
+  is.
 - `stop` sends that `start` SIGINT, as Ctrl-C would, and returns once it has
-  ended, which takes until its apps have stopped: at most the grace period.
+  ended, which takes until its apps have stopped, at most the ten-second
+  grace period; it fails if `start` is still running 15 seconds later.
   It finds the right process in each worktree, as each has its own state.
   It ends with ``Stopped `devenv start` (pid <pid>)``. With no `start`
-  running, it exits 1.
-- `restart` stops the running `start`, if any, then runs `start` itself, in
-  the foreground: run it in the background like `start` and wait for
-  `Ready:` again. It serves over Tailscale when given `--tailscale` or when
-  the `start` it stopped did.
-- `restart` loads the config in its own environment: a variable given to
-  the `start` it replaces is not carried over. Give it again.
-- `restart --apps` keeps the services as they are and skips `compose.init`
-  and `setup`, so only the apps start again. It needs a stack that is up,
-  and refuses after `down` or before any `start` or `up`. Use the plain
-  `restart` when the services, their init jobs or `setup` have changed.
-- The `start` that `restart` replaces prints its closing
-  `Stopped (SIGINT): <apps>` line, and its apps' shutdown output, to its own
-  output, not to `restart`'s.
+  running, it says so and exits 0. The services keep running.
+- After a `kill -9` of `start`, its apps keep running and holding their
+  ports, and `stop` finds nothing to stop. Stop them by hand before the next
+  `start`, or it gets other ports.
+- `status` prints `The stack is stopped.` after `down`, and
+  ``No `devenv start` is running; the apps answer here while one runs them:``
+  when the stack is up without its apps.
+- `down` and `reset` stop a running `start` the same way before they touch
+  the services.
+- To restart the apps, run `devenv stop`, then `devenv start`; with
+  `devenv up` in between when the services, their init jobs or `setup`
+  changed. The new `start` gets the same ports, as `stop` waits until the
+  old apps have released them.
+- The stopped `start` prints its closing `Stopped (SIGINT): <apps>` line,
+  and its apps' shutdown output, to its own output, not to `stop`'s.
 - Once a running `start` is ready, `status` shows the `info` lines it
   printed, as its environment made them. Before that, and with no `start`
   running, `status` evaluates `info` itself.
-- A `start` stopped before its apps run, while starting the services say,
-  ends at once, without the closing `Stopped` line.
 
 ## `run`
 
-- Needs a started stack: run `up` or `start` first. After `down` it refuses.
+- Needs a stack that is up: run `up` first. After `down` it refuses. It
+  does not need `start`.
 - The command gets the environment from the project's `env` function, on top
   of the root `.env`, with `node_modules/.bin` of the root on `PATH`.
 - It does not get an app's own `env` (its port, say); that belongs to `start`.
@@ -159,7 +173,7 @@ once it serves.
   A run that was killed outright, with any `compose.init` job it left
   running, is cleaned up by the next `devenv test` in the same worktree, by
   `reset`, or, once the checkout is gone, by `prune` if the checkout had a
-  `start` stack.
+  dev stack.
 - The exit status is the test command's, or 130 after Ctrl-C.
 
 ## `list` and `prune`

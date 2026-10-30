@@ -16,14 +16,24 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
 `package.json` first and use that form (`"local": "devenv"` means
 `pnpm local start`).
 
+A stack has two parts: `devenv up` prepares the services and setup and
+returns; `devenv start` runs the apps in the foreground.
+
 ## Working in a project that uses it
 
-- **Start the stack with `devenv start`.** It starts the services, runs the
-  project's setup commands, then runs every app until one stops. It does not
-  return, so run it in the background and read its output. Its first line
-  is `Stack <name> (pid <pid>)`. It was called
-  `devenv dev` before 0.5.0; a script that still runs that fails and names
-  `start`.
+- **Prepare the stack with `devenv up`.** It starts any Compose services,
+  runs their `compose.init` jobs and the project's `setup` commands
+  (migrations, seeds), then returns. Run it once in a new checkout, and again
+  after pulling or changing migrations, services or `setup`, after
+  `devenv down`, and after a reboot. It is safe to run while the apps run.
+- **Run the apps with `devenv start`.** It runs every app until one stops,
+  and refuses with "The stack is not up: run `devenv up` first" when the
+  stack is not up. It does not return, so run it in the background and read
+  its output. Its first line is `Stack <name> (pid <pid>)`. The apps belong to
+  that process: when it is stopped or killed (a background task timing out
+  included) the apps stop with it; only `kill -9` leaves them running. The
+  services keep running either way. A second `start` refuses while one runs:
+  `devenv stop` first.
 - **Wait for the stack before using it.** Apps with a readiness check are
   ready once `Ready: <apps>` is printed, with the URLs after it. Apps listed
   under `Started, without a readiness check` may not answer yet: wait for
@@ -36,30 +46,24 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   apps get, so nothing has to be copied out of the state file.
 - **Run configured tests with `devenv test [-- <args>]`.** Each run gets
   fresh services when configured and removes them afterwards; host-only tests
-  need no Docker. The `start` stack and
-  its data are not touched.
-- **Stop it with `devenv stop`, restart it with `devenv restart`.** `stop`
-  finds this worktree's running `start`, stops it as Ctrl-C would and waits
-  until its apps are gone, so it never touches another worktree's stack.
-  `restart` stops it and starts again in its place: run it in the background
-  like `start`, and wait for `Ready:` again. Use it after changes an app does
-  not pick up on its own, such as a build-and-serve app or a backend without
-  a watcher. `restart --apps` keeps the services and skips `setup`, for
-  when only app code changed. `restart` reads the config in its own
-  environment, so give it again any variable the previous `start` got.
-  The replaced `start` prints its closing `Stopped (SIGINT): <apps>` line
-  to its own output, not `restart`'s. `devenv status` says whether `start`
-  is running, its PID and the `info` lines it printed.
+  need no Docker. The dev stack and its data are not touched.
+- **Stop the apps with `devenv stop`; restart them with `devenv stop`, then
+  `devenv start`.** `stop` sends this worktree's running `start` SIGINT, as
+  Ctrl-C would, and waits until its apps are gone, so the next `start` gets
+  the same ports and URLs. With none running it exits 0. Restart after
+  changes the apps do not pick up on their own (a build-and-serve app, a
+  backend without a watcher); run `devenv up` between the two when
+  migrations, services or `setup` changed. `devenv status` says whether
+  `start` is running, its PID and the `info` lines it printed.
 - **A stopped `start` ends with `Stopped (<signal>): <apps>`**, or
   `Stopped: <apps>` after an app exited, and exits 0 when stopped by a
-  signal. Judge the stop by that exit status. pnpm 11 prints
-  `[ELIFECYCLE] Command failed` for every app it runs that is stopped, when
-  its script shell is dash, as on most Linux machines; with exit status 0
-  that is not a failure.
-- **`down` and `reset` leave a running `start`'s apps alone.** `devenv down`
-  stops any services and marks the stack stopped, keeping data and app ports.
-  `devenv reset` deletes
-  this worktree's volumes, built images and state; run it before deleting a
+  signal. Judge the stop by that exit status: pnpm 11 may print
+  `[ELIFECYCLE] Command failed` for each stopped app, which is not a failure
+  when `start` exited 0.
+- **`down` and `reset` stop a running `start` first.** `devenv down` then
+  stops any services and marks the stack stopped, keeping data and app ports;
+  `devenv up` brings it back. `devenv reset` deletes this worktree's
+  containers, volumes, built images and state; run it before deleting a
   worktree, or its containers, volumes and images are left behind.
 - **Leave Docker Compose to the launcher.** It names the Compose project per
   worktree. A `docker compose down --volumes` typed by hand can hit another
@@ -67,42 +71,25 @@ The project describes itself in `devenv.config.ts` at its root. The CLI is
   stack.
 - **Use `--tailscale` only when asked to.** It makes the stack, and whatever
   sign-in the project prefills, reachable by everyone on the tailnet.
-- **State lives outside the checkout**, in `~/.local/state/devenv`. It holds
-  the services' credentials, so do not print or copy it; ask `status` or `run`
-  instead.
-- **In a sandbox, ask for access instead of working around it.** The launcher
-  needs write access to `~/.local/state/devenv`, and the Docker socket only
-  for Compose stacks. When a
-  command fails with "Cannot write … allow writing there", ask the user to
-  allow that directory; pointing the state somewhere else would start a
-  second stack that nothing else knows about.
+- **State lives in `~/.local/state/devenv`**, outside the checkout, and holds
+  the services' credentials: do not print or copy it; ask `status` or `run`.
+  In a sandbox the launcher needs write access there, and the Docker socket
+  only for Compose stacks. On "Cannot write … allow writing there", ask the
+  user to allow that directory; pointing the state elsewhere starts a second
+  stack that nothing else knows about.
 - **Run `devenv prune` only when asked to.** It deletes the data of stacks
   whose checkout is gone, and a checkout that was merely moved looks the same.
 
 ## Host-only projects
 
 Omit `compose`, or use `compose: { files: [] }` without overlays, when every
-app runs on the host. No dummy service or Docker installation is needed.
-`start`, `up`, `status`, `run`, `test`, `down` and `reset` keep their usual
-port and environment behavior. `start --tailscale` also works; use `url()`
-for the browser-facing URLs and `port()` for loopback connections.
-`status` shows assigned URLs, not whether apps are listening. `list` reports
-host app stacks as `ready` or `stopped`. `list` needs Docker for dev stacks
-with containers; `prune` also needs it for stacks with Compose-backed tests.
-Host files are not deleted by `reset`.
-
-An older state without the host-only marker is still a Compose state. Run
-`reset` before starting it with a host-only config; cleanup still needs
-Docker even after removing `compose` from that config.
-
-With only `compose.test` files, `start`, `up`, `status`, `list` and `down`
-need no Docker; `test`, `reset` and orphan pruning still do. Removing test
-Compose files leaves host apps usable and keeps cleanup metadata until
-`reset`. Without dev Compose volumes, variables refresh on each startup.
-If state is
-unreadable, `reset` cannot identify its mode and attempts Docker cleanup.
-When Docker is unavailable, it resets local state and warns with the project
-name whose Docker resources may need manual cleanup.
+app runs on the host: no Docker is needed, and every command keeps its port
+and environment behavior. With `start --tailscale`, use `url()` for the
+browser-facing URLs and `port()` for loopback connections. `status` shows
+assigned URLs, not whether apps listen. With only `compose.test` files,
+`test`, `reset` and `prune` still need Docker. A stack first created with
+Compose needs `devenv reset`, with Docker, before a host-only config is used.
+Details: [Commands](references/commands.md#host-only-stacks).
 
 ## References
 

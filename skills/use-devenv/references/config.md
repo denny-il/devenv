@@ -69,9 +69,8 @@ because there are no services. `project` still names a unique stack per
 worktree. Build loopback origins with `port()` and public origins with
 `url()`.
 
-An empty base list with nonempty mode files still uses Compose in that mode.
-With only `compose.test` files, `start`, `up`, `status`, `list` and `down` do
-not need Docker. `test`, `reset` and orphan pruning manage Docker resources.
+An empty base list with nonempty mode files still uses Compose in that mode;
+see [Host-only stacks](commands.md#host-only-stacks).
 
 ## Fields
 
@@ -80,13 +79,13 @@ not need Docker. `test`, `reset` and orphan pruning manage Docker resources.
 | `name`             | Start of the stack names. Lowercase letters, digits, `-`, `_`.                   |
 | `compose`          | Optional Compose configuration; omitted for host-only stacks.                    |
 | `compose.files`    | Compose files of every mode, relative to the root.                               |
-| `compose.dev`      | Overlays added for `up` and `start`.                                             |
+| `compose.dev`      | Overlays added for the dev stack: `up`, `status` and `down`.                     |
 | `compose.test`     | Overlays added for `test`.                                                       |
 | `compose.init`     | Services that do a job and exit. Each runs to its end once the others are ready. |
 | `compose.env`      | Variables for the Compose files (`${POSTGRES_USER}`).                            |
 | `apps`             | The host apps, started by `start` in this order.                                 |
 | `env`              | A function from the stack to the variables every app and command gets.           |
-| `setup`            | Commands `start` runs once the services are up, before the apps.                 |
+| `setup`            | Commands `up` runs once the services are up, with local URLs.                    |
 | `test`             | `setup` commands, the test `command`, and extra `env` for `devenv test`.         |
 | `test.compose.env` | Variables for the Compose files of the test stack alone, over `compose.env`.     |
 | `info`             | A function returning lines to print under the URLs, such as a seeded sign-in.    |
@@ -138,9 +137,6 @@ runs, and nothing waits for it.
 | `ready: { timeout: 600 }`    | As above, with 600 seconds to get there instead of 300.    |
 
 - The check goes to `127.0.0.1` on the app's port, never through Tailscale.
-- `start` prints the URLs only once every app with a check is ready, so a
-  slow build delays them; an app that exits first, or runs out of time,
-  fails the start and stops the stack.
 - A port that accepts connections before the app can answer (a proxy in
   front of a server that is still building, say) is better checked with a
   `path`.
@@ -174,11 +170,10 @@ runs, and nothing waits for it.
 - **`compose.env` is fixed when dev Compose services first start.** A
   database volume keeps the login it was initialized with, so the launcher
   keeps using the original values and warns when the config's have changed.
-  `devenv reset` applies new ones, with empty data. Host-only dev stacks,
-  including those with Compose-backed tests, refresh these variables on each
-  startup until they first start dev Compose services.
+  `devenv reset` applies new ones, with empty data. A stack without dev
+  Compose services re-reads them on every `up`.
 - **A variable only the test overlay reads belongs in `test.compose.env`.**
-  In `compose.env` it would change what the `start` stack was created with and
+  In `compose.env` it would change what the dev stack was created with and
   set off that warning. Under `test`, `vars` holds both.
 - **A test stack's images do not outlive the run.** What Compose builds for a
   test run is removed with it, so a service with `build:` and no `image:` is

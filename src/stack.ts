@@ -78,17 +78,8 @@ export function testComposeEnv(config: Config): Record<string, string> {
   return { ...stringValues(config.compose?.env), ...stringValues(config.test?.compose?.env) };
 }
 
-/**
- * Starts the worktree's services, with the variables their volumes know.
- * `launcher` is recorded from the first write on. With `keepServices`, the
- * services are left as `earlier` records them, neither started nor checked.
- */
-async function startStack(
-  project: Project,
-  earlier: State | null,
-  launcher?: State["launcher"],
-  keepServices = false,
-) {
+/** Starts the worktree's services, with the variables their volumes know. */
+async function startStack(project: Project, earlier: State | null) {
   const hostOnly = !usesCompose(project.config);
   const composeEnv = composeEnvOf(project, earlier);
   const target = devTarget(project, composeEnv);
@@ -103,7 +94,7 @@ async function startStack(
       : devHostOnly
         ? { devHostOnly: true as const }
         : {};
-  if (target.files.length && !keepServices) await ensureDocker(project.root);
+  if (target.files.length) await ensureDocker(project.root);
   if (!isDeepStrictEqual(composeEnv, stringValues(project.config.compose?.env)))
     console.warn(
       "`compose.env` differs from what this stack was created with, which stays in use. Run `devenv reset` to start over with the new values.",
@@ -117,11 +108,9 @@ async function startStack(
     launcher: _previousLauncher,
     ...previous
   } = earlier ?? {};
-  // The checks before may have taken a while: a `start` may have begun,
-  // stopped or been restarted meanwhile.
-  const current = await readState(project.name);
-  if (launcher) await refuseSecondLauncher(project.root, current);
-  const recorded = launcher ?? current?.launcher;
+  // The checks before may have taken a while: a `start` may have begun or
+  // stopped meanwhile.
+  const recorded = (await readState(project.name))?.launcher;
   await writeState({
     version: 1,
     root: project.root,
@@ -134,11 +123,9 @@ async function startStack(
     ...mode,
     ...(recorded ? { launcher: recorded } : {}),
   });
-  const services = keepServices
-    ? (earlier?.services ?? {})
-    : target.files.length
-      ? await startServices(target, project.config.compose?.init ?? [])
-      : {};
+  const services = target.files.length
+    ? await startServices(target, project.config.compose?.init ?? [])
+    : {};
   return { composeEnv, services, ...mode };
 }
 
@@ -155,7 +142,10 @@ function printStack(config: Config, context: Context, info?: Record<string, stri
     console.log(`${label}: ${value}`);
 }
 
-/** `devenv up`: the services alone, and ports for the apps' URLs. */
+/**
+ * `devenv up`: the services, ports for the apps' URLs, and `setup`: all that
+ * `start` needs before it runs the apps.
+ */
 export async function up(project: Project): Promise<void> {
   const earlier = await readState(project.name);
   const started = await startStack(project, earlier);
@@ -176,7 +166,7 @@ export async function up(project: Project): Promise<void> {
       ),
     };
   }
-  await writeState({
+  const state: State = {
     version: 1,
     root: project.root,
     project: project.name,
@@ -184,7 +174,32 @@ export async function up(project: Project): Promise<void> {
     apps,
     ...(earlier?.tailnet ? { tailnet: earlier.tailnet } : {}),
     ...(launcher ? { launcher } : {}),
-  });
+  };
+  await writeState(state);
+  // Local URLs, whether or not a `start --tailscale` is serving the apps:
+  // setup reaches the services and apps on this machine, and runs the same
+  // either way. Recorded as up first, so a failed step can be run again by
+  // hand with `devenv run`.
+  const { tailnet: _tailnet, ...local } = state;
+  const environment = createEnvironment(project.config, createContext(local));
+  // A stop reaches each step's process group, and waits for it to end, as
+  // it did under `start`: a migration must not go on after `up` is gone.
+  const controller = new AbortController();
+  let interrupted: NodeJS.Signals | undefined;
+  const interrupt = (signal: NodeJS.Signals) => {
+    interrupted ??= signal;
+    controller.abort();
+  };
+  for (const signal of stopSignals) process.on(signal, interrupt);
+  try {
+    for (const command of project.config.setup ?? [])
+      await run(command, { cwd: project.root, env: environment, signal: controller.signal });
+  } catch (error) {
+    if (interrupted) throw new Error(`Setup stopped (${interrupted})`, { cause: error });
+    throw error;
+  } finally {
+    for (const signal of stopSignals) process.off(signal, interrupt);
+  }
   console.log(`State: ${statePath(project.name)}`);
 }
 
@@ -203,74 +218,69 @@ async function refuseSecondLauncher(root: string, state: State | null): Promise<
   const running = await runningLauncher(root, state);
   if (running !== undefined && running !== process.pid)
     throw new Error(
-      `\`devenv start\` is already running this stack (pid ${running}). Stop it with \`devenv stop\`, or use \`devenv restart\`.`,
+      `\`devenv start\` is already running this stack (pid ${running}). Stop it with \`devenv stop\` first.`,
     );
 }
 
-/** Refuses to start only the apps of a stack that has no services up to keep. */
-function refuseAppsOnly(state: State | null): void {
-  if (!state || state.stopped)
-    throw new Error("The stack is not up: run `devenv restart` without `--apps`");
+/** Refuses to run the apps of a stack that `up` has not prepared. */
+function refuseNotUp(state: State | null): asserts state is State {
+  if (!state || state.stopped) throw new Error("The stack is not up: run `devenv up` first");
 }
 
 /**
- * `devenv start`: services, setup, then every app until one stops. With
- * `apps`, the services are kept as they are, and neither `compose.init` nor
- * `setup` runs.
+ * `devenv start`: every app, on the stack `up` prepared, until one stops.
+ * The services are left as they are, before and after.
  */
-export async function start(
-  project: Project,
-  options: { tailscale: boolean; apps?: boolean },
-): Promise<void> {
+export async function start(project: Project, options: { tailscale: boolean }): Promise<void> {
   const { root, config } = project;
   const earlier = await readState(project.name);
   // Before anything else, and again just before the launcher is recorded.
   await refuseSecondLauncher(root, earlier);
-  // Again after `restart`'s check: a `down` may have run while it waited
-  // for the previous `start` to stop.
-  if (options.apps) refuseAppsOnly(earlier);
+  refuseNotUp(earlier);
   console.log(`Stack ${project.name} (pid ${process.pid})`);
   // Over Tailscale the apps listen on this machine only, as ever: their
   // ports are served to the tailnet over HTTPS under this machine's name
   // there, which then names every app URL.
   const tailnet = options.tailscale ? await tailnetHost() : undefined;
-  // For `stop`, `restart`, `status` and a second `start`, from the first
-  // write on: one stopped before the apps run, while starting the services
-  // say, ends at once, as there is nothing of its own to stop yet.
+  // For `stop`, `status` and a second `start`.
   const launched = await processStart(root, process.pid);
   const launcher = launched ? { pid: process.pid, started: launched } : undefined;
   let served = false;
+  let recorded = false;
   try {
-    const started = await startStack(project, earlier, launcher, options.apps);
-    const reservations = await reserveAppPorts(config.apps ?? {}, earlier?.apps);
+    const reservations = await reserveAppPorts(config.apps ?? {}, earlier.apps);
     try {
+      // The checks before may have taken a while: a `start`, `up` or `down`
+      // may have run meanwhile.
+      const current = await readState(project.name);
+      await refuseSecondLauncher(root, current);
+      refuseNotUp(current);
+      const { tailnet: _tailnet, launcher: _launcher, ...rest } = current;
       const state: State = {
-        version: 1,
-        root,
-        project: project.name,
-        ...started,
+        ...rest,
         apps: reservations.apps,
         ...(tailnet ? { tailnet } : {}),
         ...(launcher ? { launcher } : {}),
       };
       await writeState(state);
+      recorded = true;
       served = !!tailnet;
-      await runApps(config, state, reservations, { setup: !options.apps });
+      await runApps(config, state, reservations);
     } finally {
       await reservations.releaseAll();
     }
   } finally {
     // Keep what other commands recorded meanwhile, such as the mode changes
     // of a test run. Nothing to undo when nothing of this run was written.
-    const current = await readState(project.name);
+    const current = recorded ? await readState(project.name) : null;
     const ours = current?.launcher?.pid === process.pid;
     if (current && (ours || served)) {
-      const { tailnet: recordedTailnet, launcher: recorded, ...rest } = current;
+      const { tailnet: recordedTailnet, launcher: recordedLauncher, ...rest } = current;
       await writeState({
         ...rest,
         // Nothing is served any more: the URLs are local ones again.
         ...(recordedTailnet && !served ? { tailnet: recordedTailnet } : {}),
-        ...(recorded && !ours ? { launcher: recorded } : {}),
+        ...(recordedLauncher && !ours ? { launcher: recordedLauncher } : {}),
       });
     }
   }
@@ -298,38 +308,19 @@ async function stopLauncher(root: string, state: State, pid: number): Promise<vo
       );
     await sleep(100);
   }
-}
-
-/** `devenv stop`: stops the `devenv start` running this worktree's stack. */
-export async function stop(project: Project): Promise<void> {
-  const state = await readState(project.name);
-  const pid = await runningLauncher(project.root, state);
-  if (!state || pid === undefined)
-    throw new Error("No `devenv start` is running for this worktree");
-  await stopLauncher(project.root, state, pid);
   console.log(`Stopped \`devenv start\` (pid ${pid})`);
 }
 
 /**
- * `devenv restart`: stops the `devenv start` running this worktree's stack,
- * if one is, and starts again in this process, served over Tailscale when
- * asked to or when the stopped one was. With `apps`, only the apps start
- * again, on the services as they are.
+ * `devenv stop`: stops the `devenv start` running this worktree's stack, if
+ * one is. Nothing to stop is no failure: `stop; start` restarts the apps
+ * whatever ran before.
  */
-export async function restart(
-  project: Project,
-  options: { tailscale: boolean; apps: boolean },
-): Promise<void> {
+export async function stop(project: Project): Promise<void> {
   const state = await readState(project.name);
-  // Before anything is stopped: there must be services to keep.
-  if (options.apps) refuseAppsOnly(state);
   const pid = await runningLauncher(project.root, state);
   if (state && pid !== undefined) await stopLauncher(project.root, state, pid);
-  else console.log("No `devenv start` was running for this worktree");
-  await start(project, {
-    tailscale: options.tailscale || (pid !== undefined && !!state?.tailnet),
-    apps: options.apps,
-  });
+  else console.log("No `devenv start` is running for this worktree");
 }
 
 /** Adds `info` to this process's launcher record, if it is still the recorded one. */
@@ -345,20 +336,14 @@ function describeExit({ code, signal }: Exit): string {
 }
 
 /**
- * Runs setup and then the apps of a started stack, until one stops. The
+ * Runs the apps of a started stack, until one stops. The
  * apps start one after another without waiting for each other; the stack is
  * reported ready once every app with a readiness check answers.
  */
-async function runApps(
-  config: Config,
-  state: State,
-  reservations: AppReservations,
-  options: { setup: boolean },
-): Promise<void> {
+async function runApps(config: Config, state: State, reservations: AppReservations): Promise<void> {
   const { root, tailnet } = state;
   const apps = Object.entries(config.apps ?? {});
   const context = createContext(state);
-  const environment = createEnvironment(config, context);
   // Before anything runs: a check on a port the app lacks is a config error.
   const probes = new Map(
     apps.flatMap(([name, app]) => {
@@ -423,13 +408,6 @@ async function runApps(
         stop();
       });
     }
-    for (const command of options.setup ? (config.setup ?? []) : [])
-      await run(command, {
-        cwd: root,
-        env: environment,
-        signal: controller.signal,
-      });
-
     for (const [name, app] of apps) {
       await reservations.release(name);
       // Checked after the wait: a stop during it has not reached this app.
@@ -572,17 +550,22 @@ export async function status(project: Project): Promise<void> {
 export async function down(project: Project, removeVolumes: boolean): Promise<void> {
   // `reset` must work on a state it cannot read.
   let damaged = false;
-  const state = await readState(project.name).catch((error) => {
-    if (!removeVolumes) throw error;
-    damaged = true;
-    return null;
-  });
-  // Its apps would keep running, and nothing would find them any more.
-  const launcher = removeVolumes ? await runningLauncher(project.root, state) : undefined;
-  if (launcher !== undefined)
-    throw new Error(
-      `\`devenv start\` is running this stack (pid ${launcher}). Stop it with \`devenv stop\` first.`,
-    );
+  const read = () =>
+    readState(project.name).catch((error) => {
+      if (!removeVolumes) throw error;
+      damaged = true;
+      return null;
+    });
+  // The apps first: they would lose their services, and after `reset`
+  // nothing would find them any more.
+  let state = await read();
+  const launcher = await runningLauncher(project.root, state);
+  if (state && launcher !== undefined) {
+    await stopLauncher(project.root, state, launcher);
+    // Again: the stopped `start` has removed what it recorded, such as the
+    // tailnet name of its URLs.
+    state = await read();
+  }
   const target = devTarget(project, composeEnvOf(project, state));
   // Legacy states imply Docker even if the config has since dropped Compose.
   let docker = removeVolumes
@@ -618,7 +601,7 @@ export async function down(project: Project, removeVolumes: boolean): Promise<vo
   // ports. The services' published ports are anyone's again.
   if (state) {
     // Stopping the services may have taken a while: a `start` may have
-    // stopped, or been restarted, meanwhile.
+    // begun or stopped meanwhile.
     const { launcher } = (await readState(project.name)) ?? {};
     const { launcher: _earlier, ...rest } = state;
     await writeState({ ...rest, services: {}, stopped: true, ...(launcher ? { launcher } : {}) });

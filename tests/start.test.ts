@@ -55,13 +55,15 @@ function running(pid: number): boolean {
   }
 }
 
-/** A project whose config is `config`, a JavaScript object literal. */
+/** A project whose config is `config`, a JavaScript object literal, brought up. */
 async function project(config: string, files: Record<string, string> = {}) {
   await writeFile(
     join(base, "devenv.config.js"),
     `export default { name: "probe", compose: { files: ["compose.yml"] }, ${config} };`,
   );
   for (const [name, content] of Object.entries(files)) await writeFile(join(base, name), content);
+  const up = launch("up");
+  expect(await up.exited, up.output()).toBe(0);
 }
 
 function launch(command: string) {
@@ -246,15 +248,5 @@ test("a readiness check on a port the app lacks fails before anything starts", a
   const run = launch("start");
   expect(await run.exited).toBe(1);
   expect(run.output()).toContain("`api`'s readiness check: `api` has no port `c`; it has: a, b");
-  await expect(readFile(join(base, "ran"))).rejects.toThrow();
-});
-
-test("the former `dev` command names its replacement", async () => {
-  await project(
-    `apps: { api: { command: "node -e 'require(\\"fs\\").writeFileSync(\\"ran\\", \\"\\")'" } }`,
-  );
-  const run = launch("dev");
-  expect(await run.exited).toBe(1);
-  expect(run.output()).toContain("`devenv dev` is now `devenv start`");
   await expect(readFile(join(base, "ran"))).rejects.toThrow();
 });

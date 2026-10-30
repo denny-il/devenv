@@ -4,7 +4,6 @@ import {
   type Project,
   createProject,
   down,
-  restart,
   runCommand,
   start,
   status,
@@ -19,24 +18,22 @@ import { info, serve } from "./tailnet.ts";
 const usage = `Usage: devenv <command>
 
 Commands:
-  up                       Prepare app ports and start any services
-  start [--tailscale]      Start services, run setup, and run the apps until
-                           one stops; with --tailscale they are served to
-                           this machine's Tailscale network over HTTPS
-  stop                     Stop this worktree's running \`start\` and wait
-                           until its apps have stopped
-  restart [--tailscale] [--apps]
-                           Stop this worktree's running \`start\`, if any,
-                           and start again in its place; with --apps, keep
-                           the services and skip setup
+  up                       Start any services, assign app ports, and run
+                           setup
+  start [--tailscale]      Run the apps of a stack that is up until one
+                           stops; with --tailscale they are served to this
+                           machine's Tailscale network over HTTPS
+  stop                     Stop this worktree's running \`start\`, if any,
+                           and wait until its apps have stopped
   status                   Show this worktree's services, app URLs, and
                            whether \`start\` is running
   run -- <command>         Run a command with this worktree's environment
   test [-- <args>]         Run the tests on a fresh, throwaway stack that is
                            always removed
-  down                     Mark stopped; stop services and keep their volumes
-  reset                    Delete state and this worktree's Compose volumes
-                           and the images built for it
+  down                     Stop the apps and services; keep the services'
+                           volumes
+  reset                    Stop the apps; delete state and this worktree's
+                           Compose volumes and the images built for it
   list                     Show every stack on this machine
   prune [--yes]            Remove the stacks whose checkout is gone, with
                            their data
@@ -62,8 +59,6 @@ async function loadProject(): Promise<Project> {
   return createProject(root, await loadConfig(path));
 }
 
-const restartFlags = ["--tailscale", "--apps"];
-
 function noArguments(command: string, args: string[]): void {
   if (args.length) throw new Error(`\`devenv ${command}\` takes no arguments`);
 }
@@ -80,16 +75,6 @@ export async function main(argv: string[]): Promise<void> {
         throw new Error("`devenv start` takes only `--tailscale`");
       await start(await loadProject(), { tailscale: args.length === 1 });
       break;
-    case "restart": {
-      const flags = new Set(args);
-      if (flags.size !== args.length || [...flags].some((flag) => !restartFlags.includes(flag)))
-        throw new Error("`devenv restart` takes only `--tailscale` and `--apps`");
-      await restart(await loadProject(), {
-        tailscale: flags.has("--tailscale"),
-        apps: flags.has("--apps"),
-      });
-      break;
-    }
     case "stop":
       noArguments(command, args);
       await stop(await loadProject());
@@ -139,9 +124,11 @@ export async function main(argv: string[]): Promise<void> {
     case undefined:
       console.log(usage);
       break;
-    // Its name until 0.5.0: say what replaced it rather than that it is unknown.
-    case "dev":
-      throw new Error("`devenv dev` is now `devenv start`");
+    // Removed in 0.7.0: say what replaced it rather than that it is unknown.
+    case "restart":
+      throw new Error(
+        "`devenv restart` is gone: run `devenv stop`, then `devenv start`, and `devenv up` first when services or setup changed",
+      );
     default:
       throw new Error(`Unknown command: ${command}\n\n${usage}`);
   }
