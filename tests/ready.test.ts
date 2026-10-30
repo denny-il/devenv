@@ -56,17 +56,18 @@ test("an app that keeps an answer coming does not outlast the timeout", async ()
 });
 
 test("each attempt closes its connection, an answer with an open body too", async () => {
-  let open = 0;
-  let most = 0;
+  const closed: Promise<void>[] = [];
   const port = await serve((_, res) => {
     res.writeHead(503).write("still building");
   });
   server!.on("connection", (socket) => {
-    most = Math.max(most, ++open);
-    socket.once("close", () => (open -= 1));
+    closed.push(new Promise<void>((resolveClose) => socket.once("close", () => resolveClose())));
   });
   expect(await waitUntilReady({ port, path: "/", timeout: 1_200 }, signal)).toEqual({
     timeout: "it answered 503",
   });
-  expect(most).toBe(1);
+  expect(closed.length).toBeGreaterThan(1);
+  // A peer's close event can arrive after the next connection. Await every
+  // close before teardown, which would otherwise hide a leaked connection.
+  await Promise.all(closed);
 });
