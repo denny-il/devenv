@@ -10,12 +10,11 @@ is what has to be true of the project, then the steps to get there.
 If there are no container dependencies, omit `compose` from the config (or
 use `compose: { files: [] }` with no overlays). Skip the Compose adoption
 steps below. Configure host apps and their environment directly; Docker is
-not needed. `up` still assigns ports for `run` and runs `setup`, and
-`start --tailscale` works.
+not needed, and `up`, `run` and `start --tailscale` work as usual.
 
 **Compose files (when needed)**
 
-- A base file with the services, plus one overlay for `start` and, if tests need
+- A base file with the services, plus one `compose.dev` overlay and, if tests need
   services, one for `test`.
 - Services publish on loopback ports that Docker assigns. In the overlays:
 
@@ -34,7 +33,7 @@ not needed. `up` still assigns ports for `run` and runs `setup`, and
   as it runs. For Postgres, check over TCP, because the image answers on its
   socket during a temporary first start: `pg_isready -h 127.0.0.1 -U <user>`.
 - Jobs that run once and exit (create a bucket, load a fixture) are ordinary
-  services listed in `compose.init`. They must be safe to run on every start.
+  services listed in `compose.init`. They must be safe to run on every `up`.
 - Variables come from `compose.env`: write `${POSTGRES_USER}` in the file and
   give the value in the config, so there is one place that knows it.
 - The test overlay should keep nothing: `tmpfs` for data directories, and
@@ -83,11 +82,9 @@ within the range in `package.json`, and before 1.0 a range such as `^0.2.0`
 covers patch releases only: `pnpm update --latest @denny-il/devenv` goes past
 it. A plain `pnpm install` keeps the version the lockfile records.
 
-If an update keeps the older version right after a release, pnpm is holding
-the new one back: by default it prefers versions that have been out for a day
-(`minimumReleaseAge`). Listing
-the package under `minimumReleaseAgeExclude` in `pnpm-workspace.yaml` exempts
-it; that changes the project's install policy, so suggest it, do not set it.
+If an update keeps the older version right after a release, pnpm's
+`minimumReleaseAge` is holding it back; suggest, do not set,
+`minimumReleaseAgeExclude` in `pnpm-workspace.yaml`.
 
 This skill ships with the package. After an update, install it again with
 `npx skills add ./node_modules/@denny-il/devenv`.

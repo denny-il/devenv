@@ -27,19 +27,16 @@ This needs git 2.36 or newer.
 | `devenv tailnet info [--json]`      | Prints this machine's tailnet name and what keeps it from serving.                   |
 | `devenv tailnet serve <port>…`      | Serves local ports to the tailnet over HTTPS until stopped.                          |
 
-`devenv restart`, removed in 0.7.0, fails with a message naming
-`devenv stop` and `devenv start`. `devenv dev`, the name of `start` before
-0.5.0, is no longer known.
+`devenv restart` no longer exists; it fails with a message naming
+`devenv stop`, then `devenv start`.
 
 ## Host-only stacks
 
 When `compose` is omitted, or all its file lists are empty, all stack commands
-skip Docker. `up` prepares app ports, runs setup and enables `run`; `start`
-runs the apps, including optional Tailscale serving. `status` prints assigned
-URLs, not app liveness. `down` stops a running `start` and marks the stack
-stopped while preserving ports; `reset` stops a running `start` and removes
-state, not files the apps wrote on the host. `test` runs its setup and command
-with fresh ports and a separate context, without launching apps or services.
+skip Docker and otherwise behave as usual. `status` prints assigned URLs, not
+app liveness; `reset` removes state, not files the apps wrote on the host;
+`test` runs its setup and command with fresh ports, without launching apps or
+services.
 
 `list` reports host-only stacks as `ready` (environment prepared) or
 `stopped`. It and `prune` skip Docker when only host-only states are involved.
@@ -106,11 +103,10 @@ once it serves.
 ## How a stack stops
 
 - Ctrl-C, SIGTERM, a closed terminal or `devenv stop` sends one SIGINT to
-  each app's process group, whatever the launcher received, as Ctrl-C at a
-  terminal would. What is still running
-  in an app's process group ten seconds later is killed, even once the app's
-  command has exited, so a server finishing its own cleanup is not cut
-  short. A second signal kills at once.
+  each app's process group, as Ctrl-C at a terminal would. Ten seconds later
+  whatever is left in the group is killed, even after the app's command
+  exited, so a server finishing its own cleanup is not cut short. A second
+  signal kills at once.
 - A process an app moved into a process group of its own is the app's to
   stop; the launcher reaches only the app's group.
 - Any app exiting stops the whole stack, with a line naming it.
@@ -134,10 +130,17 @@ once it serves.
   it runs. A second `start` for the same worktree refuses to run while one
   is.
 - `stop` sends that `start` SIGINT, as Ctrl-C would, and returns once it has
-  ended, which takes until its apps have stopped: at most the grace period.
+  ended, which takes until its apps have stopped, at most the ten-second
+  grace period; it fails if `start` is still running 15 seconds later.
   It finds the right process in each worktree, as each has its own state.
   It ends with ``Stopped `devenv start` (pid <pid>)``. With no `start`
   running, it says so and exits 0. The services keep running.
+- After a `kill -9` of `start`, its apps keep running and holding their
+  ports, and `stop` finds nothing to stop. Stop them by hand before the next
+  `start`, or it gets other ports.
+- `status` prints `The stack is stopped.` after `down`, and
+  ``No `devenv start` is running; the apps answer here while one runs them:``
+  when the stack is up without its apps.
 - `down` and `reset` stop a running `start` the same way before they touch
   the services.
 - To restart the apps, run `devenv stop`, then `devenv start`; with
@@ -170,7 +173,7 @@ once it serves.
   A run that was killed outright, with any `compose.init` job it left
   running, is cleaned up by the next `devenv test` in the same worktree, by
   `reset`, or, once the checkout is gone, by `prune` if the checkout had a
-  `start` stack.
+  dev stack.
 - The exit status is the test command's, or 130 after Ctrl-C.
 
 ## `list` and `prune`
