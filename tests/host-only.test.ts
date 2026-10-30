@@ -166,6 +166,10 @@ test.each(["", "compose: { files: [] },"])(
     const first = state();
     expect(first.hostOnly).toBe(true);
     expect(first.services).toEqual({});
+    expect(JSON.parse(readFileSync(resolve(root, "setup.json"), "utf8"))).toMatchObject({
+      WEB_URL: `http://localhost:${first.apps.web!.ports.http}`,
+      FROM_DOTENV: "loaded",
+    });
     const status = (await command("status")).stdout;
     expect(status).toContain(`server: http://localhost:${first.apps.server!.ports.http}`);
     expect(status).not.toContain(String(first.apps.server!.ports.worker));
@@ -212,12 +216,16 @@ test.each([false, true])(
       FROM_DOTENV: "loaded",
     });
     const url = `${tailscale ? "https://test.ts.net" : "http://localhost"}:${running.apps.web!.ports.http}`;
-    expect(JSON.parse(readFileSync(resolve(root, "setup.json"), "utf8")).WEB_URL).toBe(url);
+    expect(JSON.parse(readFileSync(resolve(root, "web.json"), "utf8")).WEB_URL).toBe(url);
     expect((await command("status")).stdout).toContain(url);
     // `up` while dev owns the sockets must preserve every advertised port and the tailnet.
     await command("up");
     expect(state().apps).toEqual(running.apps);
     expect(state().tailnet).toBe(running.tailnet);
+    // Setup reaches the apps on this machine, served or not.
+    expect(JSON.parse(readFileSync(resolve(root, "setup.json"), "utf8")).WEB_URL).toBe(
+      `http://localhost:${running.apps.web!.ports.http}`,
+    );
     const closed = once(dev.child, "close");
     dev.child.kill("SIGTERM");
     expect((await closed)[0]).toBe(0);
@@ -242,6 +250,7 @@ test.each([false, true])(
 
 test("an app failure stops its sibling and descendant with the same exit status", async () => {
   config();
+  await command("up");
   const dev = start("start");
   await ready();
   const running = state();
@@ -251,9 +260,13 @@ test("an app failure stops its sibling and descendant with the same exit status"
   await portsAreFree(Object.values(running.apps).flatMap((app) => Object.values(app.ports)));
 });
 
-test("stop, restart and status find this worktree's running start", async () => {
+test("stop and status find this worktree's running start", async () => {
   config();
-  await expect(command("stop")).rejects.toThrow("No `devenv start` is running for this worktree");
+  expect((await command("stop")).stdout).toContain(
+    "No `devenv start` is running for this worktree",
+  );
+  await expect(command("start")).rejects.toThrow("The stack is not up: run `devenv up` first");
+  await command("up");
   const first = start("start");
   await ready();
   const { pid } = first.child;
@@ -262,31 +275,73 @@ test("stop, restart and status find this worktree's running start", async () => 
     `\`devenv start\` is running the apps (pid ${pid})`,
   );
   await expect(command("start")).rejects.toThrow(`already running this stack (pid ${pid})`);
-  await expect(command("reset")).rejects.toThrow("Stop it with `devenv stop` first");
+  await expect(command("restart")).rejects.toThrow(
+    "`devenv restart` is gone: run `devenv stop`, then `devenv start`",
+  );
 
   const ports = state().apps;
-  for (const file of ["server.json", "web.json", "worker.ready"]) rmSync(resolve(root, file));
-  const second = start("restart");
-  expect((await once(first.child, "close"))[0]).toBe(0);
-  expect(first.output().trimEnd().split("\n").at(-1)).toBe("Stopped (SIGINT): server, web");
-  await ready();
-  expect(state().apps).toEqual(ports);
-  expect(state().launcher?.pid).toBe(second.child.pid);
-
-  const closed = once(second.child, "close");
+  const closed = once(first.child, "close");
   const stopped = (await command("stop")).stdout;
-  expect(stopped).toContain(`Stopping \`devenv start\` (pid ${second.child.pid})`);
-  expect(stopped.trimEnd().split("\n").at(-1)).toBe(
-    `Stopped \`devenv start\` (pid ${second.child.pid})`,
-  );
+  expect(stopped).toContain(`Stopping \`devenv start\` (pid ${pid})`);
+  expect(stopped.trimEnd().split("\n").at(-1)).toBe(`Stopped \`devenv start\` (pid ${pid})`);
   expect((await closed)[0]).toBe(0);
+  expect(first.output().trimEnd().split("\n").at(-1)).toBe("Stopped (SIGINT): server, web");
   expect(state().launcher).toBeUndefined();
   expect((await command("status")).stdout).toContain("No `devenv start` is running");
   await portsAreFree(Object.values(ports).flatMap((app) => Object.values(app.ports)));
+
+  // Started again on the same ports.
+  for (const file of ["server.json", "web.json", "worker.ready"]) rmSync(resolve(root, file));
+  const second = start("start");
+  await ready();
+  expect(state().apps).toEqual(ports);
+  expect(state().launcher?.pid).toBe(second.child.pid);
+});
+
+test.each(["down", "reset"])("%s stops a running start first", async (name) => {
+  config();
+  await command("up");
+  const dev = start("start", "--tailscale");
+  await ready();
+  const closed = once(dev.child, "close");
+  const output = (await command(name)).stdout;
+  expect(output).toContain(`Stopped \`devenv start\` (pid ${dev.child.pid})`);
+  expect((await closed)[0]).toBe(0);
+  if (name === "reset") expect(existsSync(statePath())).toBe(false);
+  else {
+    expect(state()).toMatchObject({ stopped: true });
+    expect(state().launcher).toBeUndefined();
+    expect(state().tailnet).toBeUndefined();
+  }
+});
+
+test("start runs only the apps: the services and setup are up's", async () => {
+  config('compose: { files: ["compose.yml"] },');
+  env.ALLOW_DOCKER = "1";
+  await command("up");
+  expect(existsSync(resolve(root, "setup.json"))).toBe(true);
+  const { services, apps } = state();
+  rmSync(resolve(root, "setup.json"));
+  rmSync(resolve(home, "docker.log"));
+
+  const dev = start("start");
+  await ready();
+  expect(state()).toMatchObject({ services, apps, launcher: { pid: dev.child.pid } });
+  expect(existsSync(resolve(root, "setup.json"))).toBe(false);
+  expect(existsSync(resolve(home, "docker.log"))).toBe(false);
+
+  const closed = once(dev.child, "close");
+  await command("stop");
+  await closed;
+  // Neither does stopping it touch the services.
+  expect(existsSync(resolve(home, "docker.log"))).toBe(false);
+  await command("down");
+  await expect(command("start")).rejects.toThrow("The stack is not up: run `devenv up` first");
 });
 
 test("status shows the info lines of the running start, not its own", async () => {
   config();
+  await command("up");
   env.MODE = "watch";
   const run = start("start");
   await ready();
@@ -299,35 +354,6 @@ test("status shows the info lines of the running start, not its own", async () =
   await command("stop");
   await closed;
   expect((await command("status")).stdout).toContain("Mode: default");
-});
-
-test("restart --apps keeps the services and skips setup", async () => {
-  config('compose: { files: ["compose.yml"] },');
-  env.ALLOW_DOCKER = "1";
-  await expect(command("restart", "--apps")).rejects.toThrow("The stack is not up");
-  const first = start("start");
-  await ready();
-  expect(existsSync(resolve(root, "setup.json"))).toBe(true);
-  const { services, apps } = state();
-  for (const file of ["setup.json", "server.json", "web.json", "worker.ready"])
-    rmSync(resolve(root, file));
-  rmSync(resolve(home, "docker.log"));
-
-  const second = start("restart", "--apps");
-  expect((await once(first.child, "close"))[0]).toBe(0);
-  await ready();
-  expect(state()).toMatchObject({ services, apps, launcher: { pid: second.child.pid } });
-  expect(existsSync(resolve(root, "setup.json"))).toBe(false);
-  expect(existsSync(resolve(home, "docker.log"))).toBe(false);
-
-  const closed = once(second.child, "close");
-  await command("stop");
-  await closed;
-  await command("down");
-  await expect(command("restart", "--apps")).rejects.toThrow("The stack is not up");
-  await expect(command("restart", "--apps", "--apps")).rejects.toThrow(
-    "`devenv restart` takes only `--tailscale` and `--apps`",
-  );
 });
 
 test("host-only test uses a fresh context, propagates failure, and leaves dev state alone", async () => {
@@ -520,6 +546,7 @@ test("removing dev Compose files requires cleanup even when test Compose files r
 
 test("Tailscale teardown preserves Docker cleanup recorded by a concurrent test run", async () => {
   config();
+  await command("up");
   const dev = start("start", "--tailscale");
   await ready();
   config('compose: { files: [], test: ["compose.test.yml"] },');
