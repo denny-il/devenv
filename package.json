@@ -9,6 +9,10 @@
     "email": "ilchishin.denis@gmail.com",
     "url": "https://github.com/denny-il"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/denny-il/devenv.git"
+  },
   "bin": {
     "devenv": "./bin/devenv.js"
   },
