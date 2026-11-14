@@ -20,6 +20,7 @@ export default defineConfig({
       POSTGRES_USER: process.env.POSTGRES_USER || "shop",
       POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD || "shop",
     },
+    serve: { storage: [9000] },
   },
 
   apps: {
@@ -43,6 +44,7 @@ export default defineConfig({
     DATABASE_URL: `postgresql://${vars.POSTGRES_USER}:${vars.POSTGRES_PASSWORD}@127.0.0.1:${service("postgres").port(5432)}/shop`,
     API_URL: `${url("api.proxy")}/api`,
     WEB_URL: url("web"),
+    S3_ENDPOINT: service("storage").url(9000),
     COOKIE_PREFIX: project,
   }),
 
@@ -83,6 +85,7 @@ see [Host-only stacks](commands.md#host-only-stacks).
 | `compose.test`     | Overlays added for `test`.                                                       |
 | `compose.init`     | Services that do a job and exit. Each runs to its end once the others are ready. |
 | `compose.env`      | Variables for the Compose files (`${POSTGRES_USER}`).                            |
+| `compose.serve`    | Service ports to serve under `start --tailscale`: `{ storage: [9000] }`.         |
 | `apps`             | The host apps, started by `start` in this order.                                 |
 | `env`              | A function from the stack to the variables every app and command gets.           |
 | `setup`            | Commands `up` runs once the services are up, with local URLs.                    |
@@ -111,6 +114,41 @@ environment, or `compose.env`, has it.
   unset a variable.
 - The app must listen on `127.0.0.1`. Set its host variable in the app's
   `env` instead of trusting a default or the root `.env`.
+
+## Service ports that browsers reach
+
+Most services are reached by the apps alone, on this machine, with
+`service(name).port(target)`. One that a browser reaches itself needs an
+origin that works from wherever the pages do: object storage, when the
+backend hands out signed URLs that name the storage origin.
+
+```ts
+compose: {
+  files: [".infra/compose.yml"],
+  serve: { storage: [9000] },
+},
+env: ({ service }) => ({
+  S3_ENDPOINT: service("storage").url(9000),
+}),
+```
+
+- `compose.serve` maps a service's name to the target ports to serve, the
+  ones its Compose file publishes on loopback.
+- `service(name).url(target)` is `http://localhost:<port>`, or
+  `https://<tailnet>:<port>` under `start --tailscale`: the rules of `url()`.
+  The port is the one Docker published, in both.
+- `start --tailscale` serves these ports as it serves the app ports, before
+  any app starts. Without `--tailscale` nothing is served.
+- `url(target)` throws for a port that `compose.serve` does not name, in
+  every mode, and `up` fails when `compose.serve` names a service or port
+  the stack lacks.
+- `start` and `status` list each origin under the app URLs, as `storage`,
+  or `storage.9000` for a service with several served ports.
+- The tailnet origin answers on this machine too, so one endpoint serves
+  the backend and the browsers. The service must accept that host name: a
+  reverse proxy passes `Host` through, which S3 signatures cover.
+- Do not use it for a database or anything else only the apps talk to: a
+  served port is open to everyone on the tailnet.
 
 ## Apps and their commands
 
@@ -149,6 +187,7 @@ runs, and nothing waits for it.
 | Member                       | What it is                                                         |
 | ---------------------------- | ------------------------------------------------------------------ |
 | `service(name).port(target)` | The loopback port Docker published a service's port on.            |
+| `service(name).url(target)`  | The origin that port answers at, for one in `compose.serve`.       |
 | `port(ref)`                  | An app's port: `"api.proxy"`, or `"web"` for an app with one port. |
 | `url(ref)`                   | The origin that port answers at.                                   |
 | `vars`                       | The Compose variables as the stack uses them.                      |
@@ -157,11 +196,17 @@ runs, and nothing waits for it.
 | `tailnet`                    | This machine's tailnet name under `start --tailscale`, else unset. |
 
 - `service(name)` takes the service's name from the Compose file. Nothing
-  about services is declared in the config: the launcher reads every published
-  port after starting them.
-- `url(ref)` is `http://localhost:<port>`, or `https://<tailnet>:<port>` under
-  `--tailscale`. Build every URL an app is told from it, so the same config
-  works in both modes. For a path, append it: `` `${url("api.proxy")}/api` ``.
+  about services is declared in the config, except the ports to serve in
+  `compose.serve`: the launcher reads every published port after starting
+  them.
+- `url(ref)` and `service(name).url(target)` are `http://localhost:<port>`,
+  or `https://<tailnet>:<port>` under `--tailscale`. Build every URL an app
+  is told from them, so the same config works in both modes, and never from
+  `tailnet` or `process.argv`. For a path, append it:
+  `` `${url("api.proxy")}/api` ``.
+- `up`'s `setup` and `test` always get the local origins. `run` gets what
+  the stack has at the time: the tailnet origins while a `start --tailscale`
+  runs.
 - Asking for a service, port or app that does not exist throws with the names
   that do.
 
@@ -180,6 +225,11 @@ runs, and nothing waits for it.
   built anew for each run and leaves nothing behind. One that also names an
   `image:` is built only when that image is missing, unless it sets
   `pull_policy: build`.
+- **A recreated service gets another port.** Docker assigns the published
+  port anew when `up` recreates a container, after a changed Compose file
+  say. Apps that are running keep the old one until they are restarted. A
+  running `start --tailscale` that serves that port is stopped by `up`,
+  with a warning: run it again.
 - **`url()` and `port()` work without running apps.** `up` and `test` assign
   app ports too, so the URLs in `env` are valid values under `run` and `test`,
   even when nothing listens on them.

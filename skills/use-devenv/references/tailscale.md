@@ -2,16 +2,28 @@
 
 ## `devenv start --tailscale`
 
-Serves every app port that is not `internal` as
-`https://<machine>.<tailnet>.ts.net:<port>`, with the same port number as
-locally. The apps keep listening on `127.0.0.1`; Tailscale forwards to them.
+Serves every app port that is not `internal`, and every service port named
+in `compose.serve`, as `https://<machine>.<tailnet>.ts.net:<port>`, with the
+same port number as locally. The apps and Docker keep listening on
+`127.0.0.1`; Tailscale forwards to them.
 
-- Those are the app URLs for the whole run, on this machine too. `url()` in
-  the config returns them, so apps are configured with the tailnet origins.
-  One run uses one host name: mixing `localhost` and the tailnet name breaks
-  cookies and baked-in API URLs.
+- Those are the URLs for the whole run, on this machine too. `url()` and
+  `service(name).url(target)` in the config return them, so apps are
+  configured with the tailnet origins. One run uses one host name: mixing
+  `localhost` and the tailnet name breaks cookies and baked-in API URLs,
+  and an `http://localhost` media URL on an HTTPS page is blocked as mixed
+  content.
 - Serving starts before the apps, so a missing permission or a port already
   served fails at once.
+- A served port does not show in `tailscale serve status`, which lists only
+  entries set in the background. `devenv status` lists the origins; to see
+  that one answers, request it.
+- When `up` recreates a served service while `start --tailscale` runs,
+  Docker publishes it on another port. `up` then stops that `start` with a
+  warning naming the port, since its tailnet entry forwards to the old one
+  and its apps were told the old origin. Run `start --tailscale` again. A
+  container that is recreated or restarted outside the launcher is not
+  noticed: run `up`, as after a reboot.
 - `setup` is run by `up`, not `start`, and gets the local URLs: it reaches
   the services and apps on this machine, whatever serves them.
 - The entries exist only while `start` runs. Nothing is left to clean up,
@@ -63,9 +75,12 @@ permission shows only when serving is tried, or in `devenv setup tailscale`.
 | `HTTPS certificates are off for this tailnet` | Enable them in the admin console. Only a tailnet admin can.                                 |
 | `Tailscale does not let this user serve`      | The operator is not set. Run the `sudo tailscale set --operator=$USER` it prints.           |
 | `Port N is already served`                    | Another project, or a leftover `tailscale serve`, holds that port. Stop it and start again. |
+| `Docker no longer publishes … on the port …`  | `up` moved a served service port and stopped `start --tailscale`. Run it again.             |
+| `… has no origin: name it in compose.serve`   | `service(name).url(target)` on a port the config does not serve. Add it to `compose.serve`. |
 | `Tailscale did not start serving port N`      | It did not answer in 15 seconds. Check `tailscale status`.                                  |
 
 ## `devenv tailnet serve <port>…`
 
 Serves any local ports the same way without a project, until stopped. Useful
-for a server that the launcher does not run.
+for a server that the launcher does not run. A Compose service of the stack
+belongs in `compose.serve` instead.

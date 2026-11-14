@@ -69,6 +69,14 @@ export interface ComposeConfig {
    * stays as the environment has it.
    */
   env?: EnvValues;
+  /**
+   * Service ports that browsers reach themselves, by service and target
+   * port: `{ storage: [9000] }`. `start --tailscale` serves each to the
+   * tailnet as it serves the app ports, under the number of the loopback
+   * port Docker published it on. `service(name).url(target)` gives the
+   * origin of one. Without `--tailscale` nothing is served.
+   */
+  serve?: Record<string, number[]>;
 }
 
 export interface TestConfig {
@@ -115,10 +123,19 @@ export interface Context {
   project: string;
   /** `compose.env` as the stack uses it, under `test.compose.env` for tests. */
   vars: Readonly<Record<string, string>>;
-  /** This machine's tailnet name while the apps are served over Tailscale. */
+  /** This machine's tailnet name while the stack is served over Tailscale. */
   tailnet: string | undefined;
-  /** A Compose service, for the loopback port Docker published one of its ports on. */
-  service(name: string): { port(target: number): number };
+  /** A Compose service, by its name in the Compose files. */
+  service(name: string): {
+    /** The loopback port Docker published its port `target` on. */
+    port(target: number): number;
+    /**
+     * The origin that port answers at, for one named in `compose.serve`:
+     * under the tailnet name while the stack is served over Tailscale, as
+     * `url()` is for an app's port.
+     */
+    url(target: number): string;
+  };
   /** An app's port: `'api.proxy'`, or `'web'` for an app with a single port. */
   port(ref: string): number;
   /** The origin that port answers at. */

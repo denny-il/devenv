@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { appPorts, createContext, createEnvironment } from "../src/context.ts";
+import { appPorts, createContext, createEnvironment, servedPorts } from "../src/context.ts";
 
 const state = {
   root: "/project",
@@ -21,6 +21,31 @@ test("ports and URLs are found by app and port name", () => {
 test("over Tailscale the URLs are under the tailnet name", () => {
   const context = createContext({ ...state, tailnet: "machine.tail.ts.net" });
   expect(context.url("web")).toBe("https://machine.tail.ts.net:4200");
+});
+
+test("a service port has an origin only when compose.serve names it", () => {
+  const serve = { postgres: [5432] };
+  expect(createContext(state, serve).service("postgres").url(5432)).toBe("http://localhost:32818");
+  expect(
+    createContext({ ...state, tailnet: "machine.tail.ts.net" }, serve)
+      .service("postgres")
+      .url(5432),
+  ).toBe("https://machine.tail.ts.net:32818");
+  // Locally too: an origin that nothing would serve over Tailscale.
+  expect(() => createContext(state).service("postgres").url(5432)).toThrow(
+    "has no origin: name it in `compose.serve`, as `postgres: [5432]`",
+  );
+});
+
+test("a service with several served ports lists each by its target", () => {
+  const services = { storage: { ports: { 9000: 32820, 9001: 32821 } }, ...state.services };
+  const serve = { storage: [9000, 9001], postgres: [5432] };
+  const config = { name: "app", compose: { files: ["compose.yml"], serve } };
+  expect(servedPorts(config, createContext({ ...state, services }, serve))).toEqual([
+    { label: "storage.9000", port: 32820, url: "http://localhost:32820" },
+    { label: "storage.9001", port: 32821, url: "http://localhost:32821" },
+    { label: "postgres", port: 32818, url: "http://localhost:32818" },
+  ]);
 });
 
 test("what a stack does not have is named with what it has", () => {

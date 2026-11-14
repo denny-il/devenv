@@ -9,6 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { type Server, createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -25,6 +26,7 @@ let home: string;
 let root: string;
 let env: NodeJS.ProcessEnv;
 const children: ChildProcess[] = [];
+const listeners: Server[] = [];
 
 beforeEach(() => {
   home = realpathSync(mkdtempSync(resolve(tmpdir(), "devenv-host-only-")));
@@ -42,6 +44,8 @@ fs.appendFileSync(${JSON.stringify(resolve(home, "docker.log"))}, JSON.stringify
 if (!process.env.ALLOW_DOCKER) process.exit(99);
 if (process.argv[2] === "info") console.log("26.0.0");
 if (process.argv.includes("version")) console.log("2.24.4");
+// The services \`compose ps\` lists, for the tests that have any.
+if (process.argv.includes("ps") && process.argv.includes("json") && process.env.DOCKER_PS) console.log(process.env.DOCKER_PS);
 `,
     { mode: 0o755 },
   );
@@ -51,6 +55,9 @@ if (process.argv.includes("version")) console.log("2.24.4");
 const fs = require("node:fs");
 if (process.argv[2] === "status") {
   console.log(JSON.stringify({ BackendState: "Running", CertDomains: ["test.ts.net"], Self: { DNSName: "test.ts.net." } }));
+} else if (process.argv[3] === "--https=" + process.env.TAILSCALE_TAKEN) {
+  console.error("listener already exists for port " + process.env.TAILSCALE_TAKEN);
+  process.exitCode = 1;
 } else {
   fs.appendFileSync(${JSON.stringify(resolve(home, "tailscale.log"))}, JSON.stringify({ pid: process.pid, args: process.argv.slice(2) }) + "\\n");
   console.log("https://test.ts.net");
@@ -87,10 +94,12 @@ afterEach(async () => {
     child.kill("SIGTERM");
     await closed;
   }
+  for (const listener of listeners.splice(0)) listener.close();
   rmSync(home, { recursive: true, force: true });
 });
 
-function config(compose = ""): void {
+/** `compose`, and `env` for the project's environment, are config source. */
+function config(compose = "", env = ""): void {
   writeFileSync(resolve(root, ".env"), "FROM_DOTENV=loaded\n");
   writeFileSync(
     resolve(root, "devenv.config.js"),
@@ -102,7 +111,7 @@ function config(compose = ""): void {
       web: { command: [${JSON.stringify(process.execPath)}, "app.mjs"],
         env: ports => ({ APP: "web", HOST: "127.0.0.1", PORT: ports.http }) }
     },
-    env: ({ root, port, url, project, vars }) => ({ COMPOSE_SECRET: vars.SECRET, CONFIG: root + "/config.json", API_ORIGIN: "http://127.0.0.1:" + port("server.http"), WEB_URL: url("web"), STACK: project }),
+    env: ({ root, port, url, project, vars, service }) => ({ COMPOSE_SECRET: vars.SECRET, CONFIG: root + "/config.json", API_ORIGIN: "http://127.0.0.1:" + port("server.http"), WEB_URL: url("web"), STACK: project, ${env} }),
     setup: [[${JSON.stringify(process.execPath)}, "-e", "require('fs').writeFileSync('setup.json', JSON.stringify(process.env))"]],
     info: () => ({ Mode: process.env.MODE || "default" }),
     test: { command: [${JSON.stringify(process.execPath)}, "-e", "require('fs').writeFileSync('test.json', JSON.stringify(process.env)); process.exit(Number(process.argv[1] || 0))"] }
@@ -609,3 +618,140 @@ test.each(["", ', test: ["compose.test.yml"]'])(
     expect(state().composeEnv).toEqual({ SECRET: "c" });
   },
 );
+
+/** A Compose service whose port 9000 Docker has published on a loopback port. */
+async function publishStorage(): Promise<number> {
+  const listener = createServer((socket) => socket.destroy());
+  listeners.push(listener);
+  listener.listen(0, "127.0.0.1");
+  await once(listener, "listening");
+  const { port } = listener.address() as { port: number };
+  env.ALLOW_DOCKER = "1";
+  env.DOCKER_PS = JSON.stringify({
+    Service: "storage",
+    Publishers: [{ TargetPort: 9000, PublishedPort: port, Protocol: "tcp" }],
+  });
+  return port;
+}
+
+const storage = [
+  'compose: { files: ["compose.yml"], serve: { storage: [9000] } },',
+  'STORAGE_URL: service("storage").url(9000)',
+] as const;
+
+function tailscaleLog(): { pid: number; args: string[] }[] {
+  return readFileSync(resolve(home, "tailscale.log"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+}
+
+test("a service port in compose.serve is served with the apps, and has their kind of origin", async () => {
+  config(...storage);
+  const port = await publishStorage();
+  const local = `http://localhost:${port}`;
+  const tailnet = `https://test.ts.net:${port}`;
+  await command("up");
+  expect(JSON.parse(readFileSync(resolve(root, "setup.json"), "utf8")).STORAGE_URL).toBe(local);
+  expect((await command("status")).stdout).toContain(`storage: ${local}`);
+
+  const dev = start("start", "--tailscale");
+  await ready();
+  const running = state();
+  // Under the number of its loopback port, like the app ports before it.
+  expect(tailscaleLog().map(({ args }) => args.slice(1))).toEqual(
+    [running.apps.server!.ports.http, running.apps.web!.ports.http, port].map((each) => [
+      `--https=${each}`,
+      `http://127.0.0.1:${each}`,
+    ]),
+  );
+  expect(JSON.parse(readFileSync(resolve(root, "web.json"), "utf8")).STORAGE_URL).toBe(tailnet);
+  await expect.poll(dev.output).toContain(`storage: ${tailnet}`);
+  expect((await command("status")).stdout).toContain(`storage: ${tailnet}`);
+  const run = await command("run", "--", process.execPath, "-p", "process.env.STORAGE_URL");
+  expect(run.stdout.trim()).toBe(tailnet);
+  // Setup and the tests reach the service on this machine.
+  await command("up");
+  expect(JSON.parse(readFileSync(resolve(root, "setup.json"), "utf8")).STORAGE_URL).toBe(local);
+  await command("test");
+  expect(JSON.parse(readFileSync(resolve(root, "test.json"), "utf8")).STORAGE_URL).toBe(local);
+
+  const closed = once(dev.child, "close");
+  await command("stop");
+  expect((await closed)[0]).toBe(0);
+  for (const { pid } of tailscaleLog()) expect(() => process.kill(pid, 0)).toThrow();
+  expect((await command("status")).stdout).toContain(`storage: ${local}`);
+});
+
+test("without --tailscale a service port in compose.serve is not served", async () => {
+  config(...storage);
+  const port = await publishStorage();
+  await command("up");
+  const dev = start("start");
+  await ready();
+  await expect.poll(dev.output).toContain(`storage: http://localhost:${port}`);
+  expect(JSON.parse(readFileSync(resolve(root, "web.json"), "utf8")).STORAGE_URL).toBe(
+    `http://localhost:${port}`,
+  );
+  expect(existsSync(resolve(home, "tailscale.log"))).toBe(false);
+});
+
+test("a service port that cannot be served fails the start before any app runs", async () => {
+  config(...storage);
+  env.TAILSCALE_TAKEN = String(await publishStorage());
+  await command("up");
+  await expect(command("start", "--tailscale")).rejects.toThrow(
+    `Port ${env.TAILSCALE_TAKEN} is already served under this machine's tailnet name`,
+  );
+  expect(existsSync(resolve(root, "web.json"))).toBe(false);
+  // The app ports served before it are let go.
+  for (const { pid } of tailscaleLog()) expect(() => process.kill(pid, 0)).toThrow();
+  expect(state().tailnet).toBeUndefined();
+});
+
+test("up stops a start --tailscale whose served service port Docker has moved", async () => {
+  config(...storage);
+  const before = await publishStorage();
+  await command("up");
+  const dev = start("start", "--tailscale");
+  await ready();
+  // An `up` that leaves the port where it is leaves the apps running.
+  await command("up");
+  expect(dev.child.exitCode).toBeNull();
+
+  const closed = once(dev.child, "close");
+  const after = await publishStorage();
+  const up = await command("up");
+  expect(up.stderr).toContain(
+    `Docker no longer publishes storage port 9000 (${before}, now ${after}) on the port the running \`devenv start --tailscale\` serves`,
+  );
+  expect((await closed)[0]).toBe(0);
+  for (const { pid } of tailscaleLog()) expect(() => process.kill(pid, 0)).toThrow();
+  expect(state()).toMatchObject({ services: { storage: { ports: { 9000: after } } } });
+  expect(state().tailnet).toBeUndefined();
+  expect(state().launcher).toBeUndefined();
+});
+
+test("up moves a served service port under a start without --tailscale, which keeps running", async () => {
+  config(...storage);
+  await publishStorage();
+  await command("up");
+  const dev = start("start");
+  await ready();
+  await publishStorage();
+  await command("up");
+  expect(dev.child.exitCode).toBeNull();
+  expect(state().launcher?.pid).toBe(dev.child.pid);
+});
+
+test("a service or port that compose.serve names and the stack lacks fails up", async () => {
+  await publishStorage();
+  config('compose: { files: ["compose.yml"], serve: { storage: [9001] } },');
+  await expect(command("up")).rejects.toThrow(
+    "`compose.serve`: Service `storage` publishes no port 9001",
+  );
+  config('compose: { files: ["compose.yml"], serve: { cache: [6379] } },');
+  await expect(command("up")).rejects.toThrow(
+    "`compose.serve`: No running service `cache`; there are: storage",
+  );
+});

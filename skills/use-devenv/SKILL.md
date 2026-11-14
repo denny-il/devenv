@@ -69,8 +69,13 @@ returns; `devenv start` runs the apps in the foreground.
   worktree. A `docker compose down --volumes` typed by hand can hit another
   worktree's data, and a plain `docker compose up` starts a second, unrelated
   stack.
-- **Use `--tailscale` only when asked to.** It makes the stack, and whatever
-  sign-in the project prefills, reachable by everyone on the tailnet.
+- **Use `--tailscale` only when asked to.** It makes the apps, the service
+  ports the config names in `compose.serve`, and whatever sign-in the
+  project prefills, reachable by everyone on the tailnet.
+- **A service that browsers reach directly goes in `compose.serve`**, with
+  its origin from `service(name).url(target)`: object storage whose signed
+  URLs name it, say. Do not add an app that runs `devenv tailnet serve` for
+  it, or build its origin from `tailnet` by hand.
 - **State lives in `~/.local/state/devenv`**, outside the checkout, and holds
   the services' credentials: do not print or copy it; ask `status` or `run`.
   In a sandbox the launcher needs write access there, and the Docker socket

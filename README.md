@@ -59,7 +59,7 @@ npx skills add ./node_modules/@denny-il/devenv
 | `devenv start`                      | Runs every app of a stack that is up, until one stops.                          |
 | `devenv start --tailscale`          | The same, with the apps served to this machine's tailnet over HTTPS.            |
 | `devenv stop`                       | Stops this worktree's running `start`, if any, and waits until its apps stop.   |
-| `devenv status`                     | Shows the services, the app URLs, and whether `start` is running.               |
+| `devenv status`                     | Shows the services, the URLs, and whether `start` is running.                   |
 | `devenv run -- <command>`           | Runs a command with the stack's environment.                                    |
 | `devenv test [-- <args>]`           | Runs the tests on a fresh stack of their own, always removed afterwards.        |
 | `devenv down`                       | Stops the apps and the services; keeps the services' named volumes.             |
@@ -200,6 +200,9 @@ export default defineConfig({
       POSTGRES_USER: process.env.POSTGRES_USER || "shop",
       POSTGRES_PASSWORD: process.env.POSTGRES_PASSWORD || "shop",
     },
+    // Service ports that browsers reach themselves, by target port:
+    // `start --tailscale` serves them with the app ports.
+    serve: { storage: [9000] },
   },
 
   // Started by `start` in this order, without waiting for one another.
@@ -227,6 +230,8 @@ export default defineConfig({
     DATABASE_URL: `postgresql://${vars.POSTGRES_USER}:${vars.POSTGRES_PASSWORD}@127.0.0.1:${service("postgres").port(5432)}/shop`,
     API_URL: `${url("api.proxy")}/api`,
     WEB_URL: url("web"),
+    // The origin of a port in `compose.serve`, which signed URLs name.
+    S3_ENDPOINT: service("storage").url(9000),
     // Browsers share cookies across ports: a name per worktree keeps their
     // sessions apart.
     COOKIE_PREFIX: project,
@@ -256,12 +261,16 @@ The functions get the stack as a context:
 | Member                       | What it is                                                         |
 | ---------------------------- | ------------------------------------------------------------------ |
 | `service(name).port(target)` | The loopback port Docker published a service's port on.            |
+| `service(name).url(target)`  | The origin that port answers at, for one in `compose.serve`.       |
 | `port(ref)`                  | An app's port: `'api.proxy'`, or `'web'` for an app with one port. |
 | `url(ref)`                   | The origin that port answers at.                                   |
 | `vars`                       | The Compose variables as the stack uses them.                      |
 | `project`                    | The stack's Compose project name.                                  |
 | `root`                       | The project root.                                                  |
 | `tailnet`                    | This machine's tailnet name, under `start --tailscale`.            |
+
+Both `url`s are `http://localhost:<port>`, or `https://<tailnet>:<port>` under
+`start --tailscale`.
 
 ## How a stack behaves
 
@@ -302,6 +311,16 @@ The functions get the stack as a context:
 `devenv start --tailscale` serves every app port that is not `internal` as
 `https://<machine>.<tailnet>.ts.net:<port>`. Those are the app URLs for the
 run, on this machine too.
+
+A Compose service that browsers reach themselves, such as object storage
+whose signed URLs name its origin, is served the same way once its port is
+named in `compose.serve`: under the number of the loopback port Docker
+published it on, before any app starts, and until `start` stops.
+`service(name).url(target)` is its origin, and `start` and `status` list it
+under the app URLs. When `devenv up` recreates such a service while a
+`start --tailscale` runs, Docker publishes it on another port: `up` then
+stops that `start`, which would otherwise keep serving the old port, and it
+has to be run again.
 
 Once per tailnet and machine:
 

@@ -5,6 +5,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
 import {
   type ComposeTarget,
+  type Services,
   compose,
   composeProjects,
   ensureDocker,
@@ -14,7 +15,13 @@ import {
   takeDown,
 } from "./compose.ts";
 import { type Command, type Config, type Context, defaultPorts, usesCompose } from "./config.ts";
-import { appPorts, createContext, createEnvironment, stringValues } from "./context.ts";
+import {
+  appPorts,
+  createContext,
+  createEnvironment,
+  servedPorts,
+  stringValues,
+} from "./context.ts";
 import {
   abandonedTestProjects,
   createTestProjectName,
@@ -129,7 +136,10 @@ async function startStack(project: Project, earlier: State | null) {
   return { composeEnv, services, ...mode };
 }
 
-/** The app URLs, then the `info` lines: `info` as given, or the config's for `context`. */
+/**
+ * The app URLs, the origins of the service ports in `compose.serve`, then
+ * the `info` lines: `info` as given, or the config's for `context`.
+ */
 function printStack(config: Config, context: Context, info?: Record<string, string>): void {
   for (const [app, { ports = defaultPorts }] of Object.entries(config.apps ?? {})) {
     const listed = Object.keys(ports).filter((name) => !ports[name]?.internal);
@@ -138,6 +148,9 @@ function printStack(config: Config, context: Context, info?: Record<string, stri
       console.log(`${listed.length === 1 ? app : ref}: ${context.url(ref)}`);
     }
   }
+  // Nothing else shows that a service port is served: `tailscale serve
+  // status` does not list the entries of a `start`.
+  for (const { label, url } of servedPorts(config, context)) console.log(`${label}: ${url}`);
   for (const [label, value] of Object.entries(info ?? config.info?.(context) ?? {}))
     console.log(`${label}: ${value}`);
 }
@@ -149,6 +162,7 @@ function printStack(config: Config, context: Context, info?: Record<string, stri
 export async function up(project: Project): Promise<void> {
   const earlier = await readState(project.name);
   const started = await startStack(project, earlier);
+  await stopOutdatedServing(project, earlier, started.services);
   const reservations = await reserveAppPorts(project.config.apps ?? {}, earlier?.apps);
   await reservations.releaseAll();
   // Ports the stack already has stay, free or not: a `start` running in
@@ -156,8 +170,9 @@ export async function up(project: Project): Promise<void> {
   // under it. For the same reason its tailnet name stays.
   const apps: State["apps"] = {};
   // Starting the services may have taken a while: a `start` may have
-  // stopped, or been restarted, meanwhile.
-  const { launcher } = (await readState(project.name)) ?? {};
+  // stopped, or been restarted, meanwhile, and one was stopped just now if
+  // what it served had moved.
+  const { launcher, tailnet } = (await readState(project.name)) ?? {};
   for (const [app, { ports }] of Object.entries(reservations.apps)) {
     const held = earlier?.apps[app]?.ports ?? {};
     apps[app] = {
@@ -172,16 +187,19 @@ export async function up(project: Project): Promise<void> {
     project: project.name,
     ...started,
     apps,
-    ...(earlier?.tailnet ? { tailnet: earlier.tailnet } : {}),
+    ...(tailnet ? { tailnet } : {}),
     ...(launcher ? { launcher } : {}),
   };
   await writeState(state);
-  // Local URLs, whether or not a `start --tailscale` is serving the apps:
+  // Local URLs, whether or not a `start --tailscale` is serving the stack:
   // setup reaches the services and apps on this machine, and runs the same
   // either way. Recorded as up first, so a failed step can be run again by
   // hand with `devenv run`.
   const { tailnet: _tailnet, ...local } = state;
-  const environment = createEnvironment(project.config, createContext(local));
+  const context = createContext(local, project.config.compose?.serve);
+  // Here, where the services are known, rather than at the next `start`.
+  servedPorts(project.config, context);
+  const environment = createEnvironment(project.config, context);
   // A stop reaches each step's process group, and waits for it to end, as
   // it did under `start`: a migration must not go on after `up` is gone.
   const controller = new AbortController();
@@ -208,6 +226,39 @@ async function runningLauncher(root: string, state: State | null): Promise<numbe
   const launcher = state?.launcher;
   if (!launcher) return undefined;
   return (await processStart(root, launcher.pid)) === launcher.started ? launcher.pid : undefined;
+}
+
+/**
+ * Stops a `start --tailscale` that serves a service port which `up` has just
+ * moved: Docker publishes a recreated container's ports anew. Its tailnet
+ * entry would go on forwarding to the old port, which answers nothing, or is
+ * whatever Docker publishes there next, and its apps were told the old
+ * origin. Starting the apps again serves the new port.
+ */
+async function stopOutdatedServing(
+  project: Project,
+  earlier: State | null,
+  services: Services,
+): Promise<void> {
+  const moved = Object.entries(project.config.compose?.serve ?? {}).flatMap(([name, targets]) =>
+    targets.flatMap((target) => {
+      const before = earlier?.services[name]?.ports[target];
+      const now = services[name]?.ports[target];
+      return before === undefined || before === now
+        ? []
+        : [`${name} port ${target} (${before}, now ${now ?? "not published"})`];
+    }),
+  );
+  if (!moved.length) return;
+  // That `start` uses the services recorded when it began, which until this
+  // `up` records its own are the earlier ones.
+  const state = await readState(project.name);
+  const pid = state?.tailnet ? await runningLauncher(project.root, state) : undefined;
+  if (!state || pid === undefined) return;
+  console.warn(
+    `Docker no longer publishes ${moved.join(", ")} on the port the running \`devenv start --tailscale\` serves to the tailnet, so that is stopped. Run it again once \`up\` is done.`,
+  );
+  await stopLauncher(project.root, state, pid);
 }
 
 /**
@@ -239,8 +290,9 @@ export async function start(project: Project, options: { tailscale: boolean }): 
   refuseNotUp(earlier);
   console.log(`Stack ${project.name} (pid ${process.pid})`);
   // Over Tailscale the apps listen on this machine only, as ever: their
-  // ports are served to the tailnet over HTTPS under this machine's name
-  // there, which then names every app URL.
+  // ports, and the service ports in `compose.serve`, are served to the
+  // tailnet over HTTPS under this machine's name there, which then names
+  // every one of their URLs.
   const tailnet = options.tailscale ? await tailnetHost() : undefined;
   // For `stop`, `status` and a second `start`.
   const launched = await processStart(root, process.pid);
@@ -343,7 +395,7 @@ function describeExit({ code, signal }: Exit): string {
 async function runApps(config: Config, state: State, reservations: AppReservations): Promise<void> {
   const { root, tailnet } = state;
   const apps = Object.entries(config.apps ?? {});
-  const context = createContext(state);
+  const context = createContext(state, config.compose?.serve);
   // Before anything runs: a check on a port the app lacks is a config error.
   const probes = new Map(
     apps.flatMap(([name, app]) => {
@@ -352,11 +404,16 @@ async function runApps(config: Config, state: State, reservations: AppReservatio
     }),
   );
 
-  const served = apps.flatMap(([app, { ports = defaultPorts }]) =>
-    Object.keys(ports)
-      .filter((name) => !ports[name]?.internal)
-      .map((name) => context.port(`${app}.${name}`)),
-  );
+  // The service ports too, and whether or not they are served: one the
+  // stack lacks is a config error, as above.
+  const served = [
+    ...apps.flatMap(([app, { ports = defaultPorts }]) =>
+      Object.keys(ports)
+        .filter((name) => !ports[name]?.internal)
+        .map((name) => context.port(`${app}.${name}`)),
+    ),
+    ...servedPorts(config, context).map(({ port }) => port),
+  ];
   const serving = tailnet && served.length ? createServing(tailnet) : undefined;
   const children: { name: string; child: ChildProcess; closed: Promise<void> }[] = [];
   const waits: Promise<void>[] = [];
@@ -540,7 +597,7 @@ export async function status(project: Project): Promise<void> {
     // has recorded none.
     printStack(
       project.config,
-      createContext(state),
+      createContext(state, project.config.compose?.serve),
       launcher === undefined ? undefined : state.launcher?.info,
     );
   }
@@ -614,7 +671,7 @@ export async function runCommand(project: Project, command: string[]): Promise<v
   if (!state || state.stopped) throw new Error("Run `devenv up` first");
   const child = spawnCommand(command, {
     cwd: project.root,
-    env: createEnvironment(project.config, createContext(state)),
+    env: createEnvironment(project.config, createContext(state, project.config.compose?.serve)),
     stdio: "inherit",
   });
   // The command decides how it stops. A terminal's Ctrl-C has reached it
@@ -779,13 +836,16 @@ export async function test(project: Project, args: string[]): Promise<void> {
     // Nothing listens on the apps' ports; their URLs are still configured.
     const reservations = await reserveAppPorts(config.apps ?? {}, undefined);
     await reservations.releaseAll();
-    const context = createContext({
-      root,
-      project: name,
-      composeEnv,
-      services,
-      apps: reservations.apps,
-    });
+    const context = createContext(
+      {
+        root,
+        project: name,
+        composeEnv,
+        services,
+        apps: reservations.apps,
+      },
+      config.compose?.serve,
+    );
     const environment = createEnvironment(config, context, env);
     for (const step of setup)
       await run(step, {
