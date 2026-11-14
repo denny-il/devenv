@@ -50,8 +50,10 @@ jobs:
             echo "::error::v$VERSION already points to $tagged, not $GITHUB_SHA"
             exit 1
           fi
-      # The runtime `devEngines` pins for local work.
-      - uses: pnpm/setup@v3
+      # The runtime `devEngines` pins for local work. An exact version of the
+      # action: 3.2.0 fails on this repository's empty `pnpm-workspace.yaml`,
+      # which pnpm itself accepts.
+      - uses: pnpm/setup@v3.1.2
         with:
           runtime: node@26.12.1
           install: false
