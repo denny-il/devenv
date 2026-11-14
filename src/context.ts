@@ -1,11 +1,17 @@
 import { delimiter, resolve } from "node:path";
-import type { Config, Context, EnvValues } from "./config.ts";
+import type { ComposeConfig, Config, Context, EnvValues } from "./config.ts";
 import type { State } from "./state.ts";
 
-/** A stack's state as the functions of a config see it. */
+/**
+ * A stack's state as the functions of a config see it. `serve` is the
+ * config's `compose.serve`: the service ports that have an origin.
+ */
 export function createContext(
   state: Pick<State, "root" | "project" | "composeEnv" | "services" | "apps" | "tailnet">,
+  serve: ComposeConfig["serve"] = {},
 ): Context {
+  const origin = (port: number) =>
+    state.tailnet ? `https://${state.tailnet}:${port}` : `http://localhost:${port}`;
   const port = (ref: string) => {
     const [app = "", name, ...rest] = ref.split(".");
     const ports = state.apps[app]?.ports;
@@ -35,21 +41,58 @@ export function createContext(
         throw new Error(
           `No running service \`${name}\`; there are: ${Object.keys(state.services).join(", ") || "none"}`,
         );
+      const published = (target: number) => {
+        const found = service.ports[target];
+        if (found === undefined)
+          throw new Error(
+            `Service \`${name}\` publishes no port ${target}. Publish it on a loopback port Docker assigns.`,
+          );
+        return found;
+      };
       return {
-        port(target) {
-          const published = service.ports[target];
-          if (published === undefined)
+        port: published,
+        url(target) {
+          // In every mode, not only over Tailscale, where the origin of a
+          // port that is not served would answer nothing: a config that
+          // works locally must not fail on the first `start --tailscale`.
+          if (!serve[name]?.includes(target))
             throw new Error(
-              `Service \`${name}\` publishes no port ${target}. Publish it on a loopback port Docker assigns.`,
+              `Service \`${name}\` port ${target} has no origin: name it in \`compose.serve\`, as \`${name}: [${target}]\`, so that \`start --tailscale\` serves it.`,
             );
-          return published;
+          return origin(published(target));
         },
       };
     },
     port,
-    url: (ref) =>
-      state.tailnet ? `https://${state.tailnet}:${port(ref)}` : `http://localhost:${port(ref)}`,
+    url: (ref) => origin(port(ref)),
   };
+}
+
+/** A service port of `compose.serve` in a stack. */
+export interface ServedPort {
+  /** As `start` and `status` list it. */
+  label: string;
+  /** The loopback port Docker published it on. */
+  port: number;
+  url: string;
+}
+
+/** The service ports `compose.serve` names, as `context`'s stack has them. */
+export function servedPorts(config: Config, context: Context): ServedPort[] {
+  return Object.entries(config.compose?.serve ?? {}).flatMap(([name, targets]) =>
+    targets.map((target) => {
+      try {
+        const service = context.service(name);
+        return {
+          label: targets.length === 1 ? name : `${name}.${target}`,
+          port: service.port(target),
+          url: service.url(target),
+        };
+      } catch (error) {
+        throw new Error(`\`compose.serve\`: ${(error as Error).message}`);
+      }
+    }),
+  );
 }
 
 /**

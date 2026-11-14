@@ -16,7 +16,7 @@ This needs git 2.36 or newer.
 | `devenv up`                         | Starts the services, runs `compose.init`, assigns the app ports, runs `setup`.       |
 | `devenv start [--tailscale]`        | Runs every app of a stack that is up, until one stops.                               |
 | `devenv stop`                       | Stops this worktree's running `start`, if any, and waits until it has ended.         |
-| `devenv status`                     | Lists the containers, whether `start` runs, the app URLs and the `info` lines.       |
+| `devenv status`                     | Lists the containers, whether `start` runs, the URLs and the `info` lines.           |
 | `devenv run -- <command>`           | Runs a command with the stack's environment.                                         |
 | `devenv test [-- <args>]`           | Runs the tests on a fresh stack that is always removed.                              |
 | `devenv down`                       | Stops `start`, then the services; keeps named volumes, credentials and app ports.    |
@@ -59,15 +59,23 @@ warns which project may still have containers or volumes to remove.
 1. Starts any Compose services and waits until each is healthy.
 2. Runs any `compose.init` services, each to its end.
 3. Assigns a port to every app port, keeping those the stack already has.
-4. Runs the `setup` commands, with the local app URLs: `url()` returns
-   `http://localhost:<port>` even while a `start --tailscale` serves the
-   apps.
+4. Runs the `setup` commands, with the local URLs: `url()` and
+   `service(name).url(target)` return `http://localhost:<port>` even while a
+   `start --tailscale` serves the stack.
+
+It fails after step 3 when `compose.serve` names a service or port the stack
+does not publish.
 
 Run it in a new checkout, after changes to the services, their init jobs or
 `setup` (pulled migrations, say), after `down`, and after a reboot, when
 Docker may not have started the containers again. Running it while `start`
 runs keeps the apps' ports and URLs. A failed setup step leaves the stack up,
 so `run` can be used to look into it, and `up` runs every step again.
+
+One case stops a running `start`: it was started with `--tailscale`, and
+`up` recreated a service whose port it serves (`compose.serve`), which
+Docker then publishes on another port. `up` warns, stops that `start` as
+`devenv stop` would, and goes on; run `start --tailscale` again afterwards.
 
 ## How a stack starts
 
@@ -79,12 +87,14 @@ that fails:
 
 1. Reserves a port for every app port, the same ones as last time while they
    are free.
-2. With `--tailscale`, serves the app ports to the tailnet.
+2. With `--tailscale`, serves the app ports, and the service ports in
+   `compose.serve`, to the tailnet.
 3. Starts the apps in config order, each without waiting for the one
    before it.
 4. Waits until every app with a `ready` check answers, then prints
    `Ready: <apps>`, `Started, without a readiness check: <apps>` for the
-   others, and the URLs.
+   others, and the URLs: the apps', then the origins of the service ports in
+   `compose.serve`, then the `info` lines.
 
 While it waits, it prints `Waiting for <apps> to be ready` and no URLs. An
 app without a check is only known to have started: it may still be building
@@ -158,7 +168,9 @@ once it serves.
 - Needs a stack that is up: run `up` first. After `down` it refuses. It
   does not need `start`.
 - The command gets the environment from the project's `env` function, on top
-  of the root `.env`, with `node_modules/.bin` of the root on `PATH`.
+  of the root `.env`, with `node_modules/.bin` of the root on `PATH`. Its
+  URLs are the stack's at the time: tailnet origins while a
+  `start --tailscale` runs, local ones otherwise.
 - It does not get an app's own `env` (its port, say); that belongs to `start`.
 - The exit status is the command's.
 
@@ -167,7 +179,8 @@ once it serves.
 - Uses the base Compose files plus the `test` overlay, under a Compose project
   made for this run. `start` and `test` can run at the same time.
 - Runs `test.setup`, then `test.command`. Arguments after `--` are added to a
-  plain command; a function command receives them and decides.
+  plain command; a function command receives them and decides. Their URLs
+  are local ones; nothing of a test stack is served to the tailnet.
 - The stack is removed on success, failure and Ctrl-C, with the images
   Compose built for it; the next run builds them again from the build cache.
   A run that was killed outright, with any `compose.init` job it left

@@ -18,7 +18,7 @@ export interface State {
   composeEnv: Record<string, string>;
   services: Services;
   apps: Record<string, { ports: Record<string, number> }>;
-  /** The tailnet name the app URLs are under, when served over Tailscale. */
+  /** The tailnet name the stack's URLs are under, while served over Tailscale. */
   tailnet?: string;
   /** The stack is stopped; app ports and any volumes and `composeEnv` remain. */
   stopped?: true;

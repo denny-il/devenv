@@ -21,12 +21,13 @@ Commands:
   up                       Start any services, assign app ports, and run
                            setup
   start [--tailscale]      Run the apps of a stack that is up until one
-                           stops; with --tailscale they are served to this
+                           stops; with --tailscale they, and the service
+                           ports in \`compose.serve\`, are served to this
                            machine's Tailscale network over HTTPS
   stop                     Stop this worktree's running \`start\`, if any,
                            and wait until its apps have stopped
-  status                   Show this worktree's services, app URLs, and
-                           whether \`start\` is running
+  status                   Show this worktree's services, URLs, and whether
+                           \`start\` is running
   run -- <command>         Run a command with this worktree's environment
   test [-- <args>]         Run the tests on a fresh, throwaway stack that is
                            always removed
