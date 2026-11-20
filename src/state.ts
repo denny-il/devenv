@@ -39,6 +39,14 @@ export interface Launcher {
 }
 
 /**
+ * Whether the stack has Compose services of its own, whose containers and
+ * volumes may be in Docker.
+ */
+export function hasServices(state: State): boolean {
+  return !state.hostOnly && !state.devHostOnly;
+}
+
+/**
  * Where every stack on this machine keeps its state: outside the checkouts,
  * so a stack can be found, and removed, after its checkout is gone, and its
  * credentials are in no workspace a dev server might hand out.
@@ -168,6 +176,22 @@ export async function writeState(state: State): Promise<void> {
       { cause: error },
     );
   }
+}
+
+/**
+ * Writes `state` for any command but `start`: with the launcher and the
+ * tailnet name as the file has them now, whatever `state` says of them. They
+ * are a `start`'s to record and to remove, and one may have begun or stopped
+ * since the command read the state.
+ */
+export async function writeStateKeepingRun(state: State): Promise<void> {
+  const { launcher: _launcher, tailnet: _tailnet, ...rest } = state;
+  const { launcher, tailnet } = (await readState(state.project)) ?? {};
+  await writeState({
+    ...rest,
+    ...(tailnet ? { tailnet } : {}),
+    ...(launcher ? { launcher } : {}),
+  });
 }
 
 export async function removeState(project: string): Promise<void> {

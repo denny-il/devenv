@@ -1,12 +1,14 @@
 import { type ChildProcess, type SpawnOptions, spawn } from "node:child_process";
 import { constants } from "node:os";
+import { setTimeout as sleep } from "node:timers/promises";
 import type { Command } from "./config.ts";
 
 /** How long a stopped process group has to end before it is killed. */
 export const stopGrace = 10_000;
 
 export interface RunOptions {
-  cwd: string;
+  /** Where it runs: this process's directory unless given. */
+  cwd?: string;
   env?: NodeJS.ProcessEnv;
   /** Collects the output instead of passing it through. */
   capture?: boolean;
@@ -28,6 +30,27 @@ export interface Exit {
   signal: NodeJS.Signals | null;
 }
 
+/** The lines of a command's output that are not blank. */
+export function lines(output: string): string[] {
+  return output.split("\n").filter((line) => line.trim());
+}
+
+// Ctrl-C, a plain `kill`, a closed terminal, and Ctrl-\: left to end this
+// process on the spot, that one would leave running whatever was started in
+// a process group of its own, with nothing to find it by afterwards.
+const stopSignals = ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const;
+
+/**
+ * Has `handler` take every signal that asks this process to stop, in place
+ * of ending it, until the returned function is called.
+ */
+export function onStopSignal(handler: (signal: NodeJS.Signals) => void): () => void {
+  for (const signal of stopSignals) process.on(signal, handler);
+  return () => {
+    for (const signal of stopSignals) process.off(signal, handler);
+  };
+}
+
 export function describeCommand(command: Command): string {
   return typeof command === "string" ? command : command.join(" ");
 }
@@ -39,8 +62,16 @@ export function spawnCommand(command: Command, options: SpawnOptions): ChildProc
   return spawn(program, args, options);
 }
 
+/** How a spawned child ends. Rejects when it could not be started. */
+export function exited(child: ChildProcess): Promise<Exit> {
+  return new Promise((resolveExit, rejectExit) => {
+    child.once("error", rejectExit);
+    child.once("close", (code, signal) => resolveExit({ code, signal }));
+  });
+}
+
 /** Runs a command to its end. */
-export function run(command: Command, options: RunOptions): Promise<RunResult> {
+export function run(command: Command, options: RunOptions = {}): Promise<RunResult> {
   const {
     cwd,
     env = process.env,
@@ -136,11 +167,10 @@ export async function settleGroup(pid: number | undefined, deadline: number): Pr
       signalGroup(pid, "SIGKILL");
       // SIGKILL cannot be ignored, but exits take a moment. Bounded: a
       // zombie nothing reaps would keep the group forever.
-      for (let attempt = 0; attempt < 10 && signalGroup(pid, 0); attempt += 1)
-        await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+      for (let attempt = 0; attempt < 10 && signalGroup(pid, 0); attempt += 1) await sleep(100);
       return;
     }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+    await sleep(100);
   }
 }
 
@@ -160,10 +190,9 @@ export async function reapGroup(pid: number | undefined, grace = 5_000): Promise
  * process from a later one given the same PID. Undefined once the process has
  * ended, a zombie included, or when `ps` cannot tell.
  */
-export async function processStart(cwd: string, pid: number): Promise<string | undefined> {
+export async function processStart(pid: number): Promise<string | undefined> {
   try {
     const { code, stdout } = await run(["ps", "-o", "stat=", "-o", "lstart=", "-p", String(pid)], {
-      cwd,
       // The same text for the same start whoever asks, whatever their locale.
       env: { ...process.env, LC_ALL: "C", TZ: "UTC" },
       capture: true,

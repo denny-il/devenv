@@ -5,23 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
-import { signalGroup } from "./process.ts";
-
-/** Runs the Tailscale CLI to its end. */
-function tailscale(args: string[]): Promise<string> {
-  return new Promise((resolveOutput, rejectOutput) => {
-    const child = spawn("tailscale", args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.resume();
-    child.on("error", rejectOutput);
-    child.on("close", () => resolveOutput(stdout));
-  });
-}
+import { onStopSignal, run, signalGroup } from "./process.ts";
 
 export const certificatesOff =
   "HTTPS certificates are off for this tailnet. Enable them: https://login.tailscale.com/admin/dns";
@@ -43,7 +27,11 @@ export async function inspect(): Promise<Tailnet> {
     Self?: { DNSName?: string };
   };
   try {
-    status = JSON.parse(await tailscale(["status", "--json"]));
+    const { stdout } = await run(["tailscale", "status", "--json"], {
+      capture: true,
+      reject: false,
+    });
+    status = JSON.parse(stdout);
   } catch (error) {
     return {
       host: null,
@@ -174,8 +162,9 @@ export interface Serving {
 
 /** Serves ports under `host`, this machine's tailnet name, until `stop()`. */
 export function createServing(host: string): Serving {
+  // Every `tailscale serve` that may still run, and those of them that serve.
+  const started = new Set<PortServing>();
   const servings: PortServing[] = [];
-  let starting: PortServing | undefined;
   let stopped = false;
 
   return {
@@ -185,7 +174,9 @@ export function createServing(host: string): Serving {
       // ("etag mismatch"), whether by this process or by another project's.
       for (const port of ports)
         for (let attempt = 1; !stopped; attempt += 1) {
-          starting = servePort(host, port);
+          const starting = servePort(host, port);
+          started.add(starting);
+          void starting.closed.then(() => started.delete(starting));
           try {
             await starting.ready;
             servings.push(starting);
@@ -199,17 +190,17 @@ export function createServing(host: string): Serving {
     stop() {
       if (stopped) return;
       stopped = true;
-      const all = starting ? [...servings, starting] : servings;
-      for (const serving of all) serving.signal("SIGTERM");
+      // Each once: a second signal often means "stop at once", and one that
+      // did would leave its entry behind.
+      for (const serving of started) serving.signal("SIGTERM");
       // One that does not end when asked would keep its entry, and whoever
       // waits for it waiting.
       setTimeout(() => {
-        for (const serving of all) serving.signal("SIGKILL");
+        for (const serving of started) serving.signal("SIGKILL");
       }, 5_000).unref();
     },
     closed() {
-      const all = starting ? [...servings, starting] : servings;
-      return Promise.all(all.map((serving) => serving.closed));
+      return Promise.all([...started].map((serving) => serving.closed));
     },
     ended() {
       return Promise.race(servings.map((serving) => serving.closed.then(() => serving.failure())));
@@ -229,6 +220,8 @@ function parsePorts(values: string[]): number[] {
 
 /** `devenv tailnet info [--json]` */
 export async function info(args: string[]): Promise<void> {
+  const unknown = args.filter((argument) => argument !== "--json");
+  if (unknown.length) throw new Error("`devenv tailnet info` takes only `--json`");
   const found = await inspect();
   if (found.problems.length) process.exitCode = 1;
   if (args.includes("--json")) {
@@ -245,12 +238,12 @@ export async function serve(args: string[]): Promise<void> {
   const host = await tailnetHost();
   const serving = createServing(host);
   let stopping = false;
-  const stop = () => {
+  // Asked again, it still waits for the entries to go: a `tailscale serve`
+  // left running would keep serving its port.
+  const release = onStopSignal(() => {
     stopping = true;
     serving.stop();
-  };
-  const signals = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
-  for (const signal of signals) process.once(signal, stop);
+  });
   try {
     await serving.start(ports);
     if (!stopping) {
@@ -263,6 +256,6 @@ export async function serve(args: string[]): Promise<void> {
   } finally {
     serving.stop();
     await serving.closed();
-    for (const signal of signals) process.off(signal, stop);
+    release();
   }
 }

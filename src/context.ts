@@ -1,5 +1,11 @@
 import { delimiter, resolve } from "node:path";
-import type { ComposeConfig, Config, Context, EnvValues } from "./config.ts";
+import {
+  type ComposeConfig,
+  type Config,
+  type Context,
+  type EnvValues,
+  defaultPorts,
+} from "./config.ts";
 import type { State } from "./state.ts";
 
 /**
@@ -68,17 +74,32 @@ export function createContext(
   };
 }
 
-/** A service port of `compose.serve` in a stack. */
-export interface ServedPort {
+/** A port of a stack that has a URL: listed, and served to the tailnet. */
+export interface ListedPort {
   /** As `start` and `status` list it. */
   label: string;
-  /** The loopback port Docker published it on. */
+  /** The loopback port it answers on. */
   port: number;
   url: string;
 }
 
+/** The apps' ports that are not `internal`, as `context`'s stack has them. */
+function listedAppPorts(config: Config, context: Context): ListedPort[] {
+  return Object.entries(config.apps ?? {}).flatMap(([app, { ports = defaultPorts }]) => {
+    const listed = Object.keys(ports).filter((name) => !ports[name]?.internal);
+    return listed.map((name) => {
+      const ref = `${app}.${name}`;
+      return {
+        label: listed.length === 1 ? app : ref,
+        port: context.port(ref),
+        url: context.url(ref),
+      };
+    });
+  });
+}
+
 /** The service ports `compose.serve` names, as `context`'s stack has them. */
-export function servedPorts(config: Config, context: Context): ServedPort[] {
+export function servedPorts(config: Config, context: Context): ListedPort[] {
   return Object.entries(config.compose?.serve ?? {}).flatMap(([name, targets]) =>
     targets.map((target) => {
       try {
@@ -93,6 +114,11 @@ export function servedPorts(config: Config, context: Context): ServedPort[] {
       }
     }),
   );
+}
+
+/** Every port of the stack that has a URL: the apps', then the services'. */
+export function listedPorts(config: Config, context: Context): ListedPort[] {
+  return [...listedAppPorts(config, context), ...servedPorts(config, context)];
 }
 
 /**

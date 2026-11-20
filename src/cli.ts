@@ -1,19 +1,9 @@
-import { dirname } from "node:path";
-import { findConfig, findEnvFile, loadConfig } from "./config.ts";
-import {
-  type Project,
-  createProject,
-  down,
-  runCommand,
-  start,
-  status,
-  stop,
-  test,
-  up,
-} from "./stack.ts";
+import { loadProject } from "./project.ts";
 import { setup } from "./setup.ts";
+import { down, runCommand, start, status, stop, up } from "./stack.ts";
 import { list, prune } from "./stacks.ts";
 import { info, serve } from "./tailnet.ts";
+import { test } from "./testing.ts";
 
 const usage = `Usage: devenv <command>
 
@@ -46,69 +36,61 @@ Commands:
   tailnet serve <port>...  Serve https://<machine>:<port> from
                            http://127.0.0.1:<port> until stopped`;
 
-async function loadProject(): Promise<Project> {
-  const path = findConfig(process.cwd());
-  const root = dirname(path);
-  // Before the config, which may read it. Variables already set win.
-  const envFile = await findEnvFile(root);
-  if (envFile) {
-    // On stderr: under `run` the standard output is the command's alone.
-    if (dirname(envFile) !== root)
-      console.error(`Environment: ${envFile}, as this worktree has no .env of its own`);
-    process.loadEnvFile(envFile);
-  }
-  return createProject(root, await loadConfig(path));
-}
-
 function noArguments(command: string, args: string[]): void {
   if (args.length) throw new Error(`\`devenv ${command}\` takes no arguments`);
 }
 
+/** Whether `flag`, all that `command` takes, was given. */
+function onlyFlag(command: string, args: string[], flag: string): boolean {
+  if (args.some((argument) => argument !== flag) || args.length > 1)
+    throw new Error(`\`devenv ${command}\` takes only \`${flag}\``);
+  return args.length === 1;
+}
+
 export async function main(argv: string[]): Promise<void> {
   const [command, ...args] = argv;
+  const project = () => loadProject(process.cwd());
   switch (command) {
     case "up":
       noArguments(command, args);
-      await up(await loadProject());
+      await up(await project());
       break;
-    case "start":
-      if (args.length > 1 || (args.length === 1 && args[0] !== "--tailscale"))
-        throw new Error("`devenv start` takes only `--tailscale`");
-      await start(await loadProject(), { tailscale: args.length === 1 });
+    case "start": {
+      const tailscale = onlyFlag(command, args, "--tailscale");
+      await start(await project(), { tailscale });
       break;
+    }
     case "stop":
       noArguments(command, args);
-      await stop(await loadProject());
+      await stop(await project());
       break;
     case "status":
       noArguments(command, args);
-      await status(await loadProject());
+      await status(await project());
       break;
     case "run": {
       const commandArgs = args[0] === "--" ? args.slice(1) : args;
       if (!commandArgs.length) throw new Error("A command is required after `devenv run --`");
-      await runCommand(await loadProject(), commandArgs);
+      await runCommand(await project(), commandArgs);
       break;
     }
     case "test":
-      await test(await loadProject(), args[0] === "--" ? args.slice(1) : args);
+      await test(await project(), args[0] === "--" ? args.slice(1) : args);
       break;
     case "down":
       noArguments(command, args);
-      await down(await loadProject(), false);
+      await down(await project(), false);
       break;
     case "reset":
       noArguments(command, args);
-      await down(await loadProject(), true);
+      await down(await project(), true);
       break;
     case "list":
       noArguments(command, args);
       await list();
       break;
     case "prune":
-      if (args.length > 1 || (args.length === 1 && args[0] !== "--yes"))
-        throw new Error("`devenv prune` takes only `--yes`");
-      await prune({ yes: args.length === 1 });
+      await prune({ yes: onlyFlag(command, args, "--yes") });
       break;
     case "setup":
       await setup(args);

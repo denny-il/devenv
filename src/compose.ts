@@ -2,10 +2,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
-import { type RunOptions, type RunResult, run } from "./process.ts";
+import { setTimeout as sleep } from "node:timers/promises";
+import { type RunOptions, type RunResult, lines, run } from "./process.ts";
 
 // `!reset` in an overlay, which a test overlay drops named volumes with.
 export const composeVersionMinimum = [2, 24, 4];
+
+// The label Compose puts on all that belongs to a project.
+const projectLabel = "com.docker.compose.project";
 
 /** A Compose project and what its files are read with. */
 export interface ComposeTarget {
@@ -32,12 +36,14 @@ export function supportsComposeVersion(version: string): boolean {
   return true;
 }
 
+/**
+ * Fails unless Docker can be used. Asked from `cwd`, as every Docker command
+ * of a project is from its root: what the root `.env` names by a relative
+ * path, a Docker config say, must be the same for the checks as for Compose.
+ */
 export async function ensureDocker(cwd: string): Promise<void> {
   try {
-    await run(["docker", "info", "--format", "{{.ServerVersion}}"], {
-      cwd,
-      capture: true,
-    });
+    await run(["docker", "info", "--format", "{{.ServerVersion}}"], { cwd, capture: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT")
       throw new Error(
@@ -107,13 +113,13 @@ export async function takeDown(
       "--all",
       "--quiet",
       "--filter",
-      `label=com.docker.compose.project=${project}`,
+      `label=${projectLabel}=${project}`,
       "--filter",
       "label=com.docker.compose.oneoff=True",
     ],
     { ...runOptions, cwd: root, capture: true },
   );
-  const oneOffs = stdout.split("\n").filter((line) => line.trim());
+  const oneOffs = lines(stdout);
   // One that ends meanwhile, removed by its own `--rm`, fails here harmlessly.
   if (oneOffs.length)
     await run(["docker", "rm", "--force", "--volumes", ...oneOffs], {
@@ -148,8 +154,7 @@ export async function removeProject(project: string, options: TakeDownOptions = 
 /** The published ports in the output of `compose ps --format json`. */
 export function parsePublishedPorts(output: string): Services {
   const services: Services = {};
-  for (const line of output.split("\n")) {
-    if (!line.trim()) continue;
+  for (const line of lines(output)) {
     const container = JSON.parse(line) as {
       Service: string;
       Publishers?: {
@@ -182,7 +187,7 @@ function reachable(port: number): Promise<boolean> {
 async function waitForPublishedPort(service: string, port: number): Promise<void> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     if (await reachable(port)) return;
-    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+    await sleep(250);
   }
   throw new Error(
     `${service} is ready inside Docker but its published port ${port} is unreachable. Restart Docker and retry.`,
@@ -198,19 +203,14 @@ export async function startServices(target: ComposeTarget, init: string[]): Prom
   // failed once it has exited, so those are left out and run on their own.
   let services: string[] = [];
   if (init.length) {
-    const { stdout } = await compose(target, ["config", "--services"], {
-      capture: true,
-    });
-    const all = stdout.split("\n").filter((line) => line.trim());
-    services = all.filter((name) => !init.includes(name));
+    const { stdout } = await compose(target, ["config", "--services"], { capture: true });
+    services = lines(stdout).filter((name) => !init.includes(name));
     if (!services.length) throw new Error("`compose.init` names every service; none would start");
   }
   await compose(target, ["up", "-d", "--wait", ...services]);
   for (const job of init) await compose(target, ["run", "--rm", "--no-deps", job]);
 
-  const { stdout } = await compose(target, ["ps", "--format", "json"], {
-    capture: true,
-  });
+  const { stdout } = await compose(target, ["ps", "--format", "json"], { capture: true });
   const published = parsePublishedPorts(stdout);
   await Promise.all(
     Object.entries(published).flatMap(([service, { ports }]) =>
@@ -227,43 +227,52 @@ export async function startServices(target: ComposeTarget, init: string[]): Prom
  */
 export async function removeVolumesOf(cwd: string, project: string): Promise<void> {
   const { stdout } = await run(
+    ["docker", "volume", "ls", "--quiet", "--filter", `label=${projectLabel}=${project}`],
+    { cwd, capture: true },
+  );
+  const volumes = lines(stdout);
+  if (volumes.length) await run(["docker", "volume", "rm", ...volumes], { cwd, capture: true });
+}
+
+/** The projects of what `docker <listing>` lists, one for each thing listed. */
+async function projectsOf(cwd: string, listing: string[]): Promise<string[]> {
+  const { stdout } = await run(
     [
       "docker",
-      "volume",
-      "ls",
-      "--quiet",
+      ...listing,
       "--filter",
-      `label=com.docker.compose.project=${project}`,
+      `label=${projectLabel}`,
+      "--format",
+      `{{.Label "${projectLabel}"}}`,
     ],
     { cwd, capture: true },
   );
-  const volumes = stdout.split("\n").filter((line) => line.trim());
-  if (volumes.length) await run(["docker", "volume", "rm", ...volumes], { cwd, capture: true });
+  return lines(stdout);
+}
+
+/** The Compose projects that have a running container. */
+export async function runningProjects(cwd: string): Promise<Set<string>> {
+  return new Set(await projectsOf(cwd, ["ps"]));
 }
 
 /** Every Compose project that has a container, network, volume or built image. */
 export async function composeProjects(cwd: string): Promise<string[]> {
-  const label = "com.docker.compose.project";
-  const listings = await Promise.all(
+  const listed = await Promise.all(
     [
       ["ps", "--all"],
       ["network", "ls"],
       ["volume", "ls"],
-    ].map((command) =>
-      run(
-        ["docker", ...command, "--filter", `label=${label}`, "--format", `{{.Label "${label}"}}`],
-        { cwd, capture: true },
-      ),
-    ),
+    ].map((listing) => projectsOf(cwd, listing)),
   );
-  const lines = ({ stdout }: RunResult) => stdout.split("\n").filter((line) => line.trim());
   // An image is listed without its labels, so each is asked for its own. One
   // removed meanwhile, by a test run ending, fails that without mattering.
   const images = lines(
-    await run(["docker", "image", "ls", "--quiet", "--filter", `label=${label}`], {
-      cwd,
-      capture: true,
-    }),
+    (
+      await run(["docker", "image", "ls", "--quiet", "--filter", `label=${projectLabel}`], {
+        cwd,
+        capture: true,
+      })
+    ).stdout,
   );
   const built = images.length
     ? await run(
@@ -272,11 +281,11 @@ export async function composeProjects(cwd: string): Promise<string[]> {
           "image",
           "inspect",
           "--format",
-          `{{index .Config.Labels "${label}"}}`,
+          `{{index .Config.Labels "${projectLabel}"}}`,
           ...new Set(images),
         ],
         { cwd, capture: true, reject: false },
       )
     : undefined;
-  return [...listings, ...(built ? [built] : [])].flatMap(lines);
+  return [...listed.flat(), ...lines(built?.stdout ?? "")];
 }

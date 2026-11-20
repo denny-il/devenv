@@ -57,7 +57,7 @@ export interface AppReservations {
  */
 export async function reserveAppPorts(
   apps: Record<string, AppConfig>,
-  earlier: State["apps"] | undefined,
+  earlier?: State["apps"],
 ): Promise<AppReservations> {
   const wanted = Object.entries(apps).flatMap(([app, { ports }]) =>
     Object.keys(ports ?? defaultPorts).map((name) => ({ app, name })),
