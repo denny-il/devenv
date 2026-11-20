@@ -78,7 +78,7 @@ see [Host-only stacks](commands.md#host-only-stacks).
 
 | Field              | Meaning                                                                          |
 | ------------------ | -------------------------------------------------------------------------------- |
-| `name`             | Start of the stack names. Lowercase letters, digits, `-`, `_`.                   |
+| `name`             | Start of the stack names: a lowercase letter or digit, then those, `-`, `_`.     |
 | `compose`          | Optional Compose configuration; omitted for host-only stacks.                    |
 | `compose.files`    | Compose files of every mode, relative to the root.                               |
 | `compose.dev`      | Overlays added for the dev stack: `up`, `status` and `down`.                     |

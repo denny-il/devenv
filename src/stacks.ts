@@ -1,24 +1,13 @@
 import { existsSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
-import { ensureDocker, removeProject } from "./compose.ts";
+import { ensureDocker, removeProject, runningProjects } from "./compose.ts";
 import { testProjectPrefixOf } from "./names.ts";
-import { run } from "./process.ts";
-import { removeAbandonedTestStacks } from "./stack.ts";
-import { type State, listStates, removeState, stateHome } from "./state.ts";
+import { type State, hasServices, listStates, removeState, stateHome } from "./state.ts";
+import { removeAbandonedTestStacks } from "./testing.ts";
 
 /** The stacks whose checkout is gone: nothing can start, stop or reset them any more. */
 export function orphans(states: State[], exists: (path: string) => boolean): State[] {
   return states.filter(({ root }) => !exists(root));
-}
-
-/** The Compose projects that have a running container. */
-async function runningProjects(): Promise<Set<string>> {
-  const label = "com.docker.compose.project";
-  const { stdout } = await run(
-    ["docker", "ps", "--filter", `label=${label}`, "--format", `{{.Label "${label}"}}`],
-    { cwd: process.cwd(), capture: true },
-  );
-  return new Set(stdout.split("\n").filter((line) => line.trim()));
 }
 
 /** `devenv list`: every stack on this machine. */
@@ -28,28 +17,22 @@ export async function list(): Promise<void> {
     console.log(`No stacks: nothing under ${stateHome()}`);
     return;
   }
-  const docker = states.some((state) => !state.hostOnly && !state.devHostOnly);
+  const docker = states.some(hasServices);
   if (docker) await ensureDocker(process.cwd());
-  const running = docker ? await runningProjects() : new Set<string>();
+  const running = docker ? await runningProjects(process.cwd()) : new Set<string>();
   const gone = new Set(orphans(states, existsSync));
   const width = Math.max(...states.map(({ project }) => project.length));
   for (const state of states) {
-    const status = [
-      gone.has(state) ? "orphaned" : undefined,
-      state.hostOnly || state.devHostOnly
-        ? gone.has(state)
-          ? undefined
-          : state.stopped
-            ? "stopped"
-            : "ready"
-        : running.has(state.project)
-          ? "running"
-          : gone.has(state)
-            ? undefined
-            : "stopped",
-    ]
-      .filter(Boolean)
-      .join(", ");
+    const orphaned = gone.has(state);
+    // Without services of its own, nothing of a stack runs between its
+    // `start`s: it is prepared for one, or not.
+    const prepared = state.stopped ? "stopped" : "ready";
+    const activity = hasServices(state)
+      ? running.has(state.project)
+        ? "running"
+        : !orphaned && "stopped"
+      : !orphaned && prepared;
+    const status = [orphaned && "orphaned", activity].filter(Boolean).join(", ");
     console.log(`${state.project.padEnd(width)}  ${status.padEnd(17)}  ${state.root}`);
   }
 }

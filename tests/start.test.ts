@@ -179,6 +179,23 @@ setInterval(() => {}, 1000);`,
   expect(running(server!)).toBe(false);
 }, 20_000);
 
+test("Ctrl-\\ stops the apps too, rather than ending the launcher and leaving them", async () => {
+  await project(`apps: { api: { command: "node server.mjs" } }`, {
+    "server.mjs": `import { writeFileSync } from "node:fs";
+writeFileSync("pids.json", JSON.stringify({ server: process.pid }));
+setInterval(() => {}, 1000);`,
+  });
+  const run = launch("start");
+  const { server } = await json(join(base, "pids.json"));
+  pids.push(server!);
+  run.child.kill("SIGQUIT");
+
+  expect(await run.exited).toBe(0);
+  expect(running(server!)).toBe(false);
+  // Its last words may come after its exit.
+  await run.until("Stopped (SIGQUIT): api");
+});
+
 // Builds for a second, then serves `/health`.
 const slowServer = `
 import { createServer } from "node:http";

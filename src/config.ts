@@ -201,7 +201,20 @@ export async function findEnvFile(root: string): Promise<string | undefined> {
   }
 }
 
+// What Compose takes for a project's name, which every stack's name starts
+// with. A stack's state is filed under that name, and read back only under
+// one of this form.
+const namePattern = /^[a-z0-9][a-z0-9_-]*$/;
+
 export async function loadConfig(path: string): Promise<Config> {
-  const module: { default: Config } = await import(pathToFileURL(path).href);
-  return module.default;
+  const module: { default?: unknown } = await import(pathToFileURL(path).href);
+  const config = module.default;
+  if (typeof config !== "object" || config === null)
+    throw new Error(`${path} must have the config as its default export`);
+  const { name } = config as Partial<Config>;
+  if (typeof name !== "string" || !namePattern.test(name))
+    throw new Error(
+      `\`name\` in ${path} must be made of lowercase letters, digits, \`-\` and \`_\`, and start with a letter or digit`,
+    );
+  return config as Config;
 }

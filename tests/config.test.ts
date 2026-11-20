@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { afterAll, expect, test } from "vitest";
-import { findEnvFile } from "../src/config.ts";
+import { findEnvFile, loadConfig } from "../src/config.ts";
 
 const home = realpathSync(mkdtempSync(resolve(tmpdir(), "devenv-config-")));
 afterAll(() => rmSync(home, { recursive: true, force: true }));
@@ -64,4 +64,23 @@ test("nothing is taken from elsewhere outside a linked worktree", async () => {
   rmSync(resolve(main, ".env"));
   expect(await findEnvFile(main)).toBeUndefined();
   expect(await findEnvFile(worktree)).toBeUndefined();
+});
+
+test("a config is refused unless it names stacks as Compose and their state files take", async () => {
+  const load = (name: string, source: string) => {
+    const path = resolve(home, name);
+    writeFileSync(path, source);
+    return loadConfig(path);
+  };
+  expect(await load("named.js", `export default { name: "my-app_2" };`)).toEqual({
+    name: "my-app_2",
+  });
+  // A state filed under any of these would not be read back.
+  for (const [index, name] of ["MyApp", "my app", "@scope/app", "-app", ""].entries())
+    await expect(
+      load(`unnamed-${index}.js`, `export default { name: ${JSON.stringify(name)} };`),
+    ).rejects.toThrow("`name` in");
+  await expect(load("named-export.js", `export const config = { name: "app" };`)).rejects.toThrow(
+    "must have the config as its default export",
+  );
 });

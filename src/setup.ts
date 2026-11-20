@@ -15,12 +15,10 @@ export interface Requirement {
   manual?: string;
 }
 
-const cwd = process.cwd();
-
 /** What `command` printed, or nothing if it is missing or failed. */
 async function output(command: Command): Promise<string | undefined> {
   try {
-    const result = await run(command, { cwd, capture: true, reject: false });
+    const result = await run(command, { capture: true, reject: false });
     return result.code === 0 ? result.stdout : undefined;
   } catch {
     return undefined;
@@ -176,8 +174,10 @@ export async function setup(wanted: string[]): Promise<void> {
   if (unknown.length)
     throw new Error(`\`devenv setup\` knows ${targets.join(" and ")}, not ${unknown.join(", ")}`);
   const user = userInfo().username;
-  // A command that fails shows in the requirement staying unmet.
-  const runFix = (command: Command) => run(command, { cwd, reject: false });
+  // A command that fails, or cannot be run, shows in the requirement staying
+  // unmet.
+  const runFix = (command: Command) =>
+    run(command, { reject: false }).catch((error: Error) => console.error(error.message));
 
   let met = true;
   for (const target of targets) {

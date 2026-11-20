@@ -1,4 +1,4 @@
-import { type ChildProcess, execFile, spawn } from "node:child_process";
+import { type ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import {
   existsSync,
@@ -42,6 +42,12 @@ beforeEach(() => {
 const fs = require("node:fs");
 fs.appendFileSync(${JSON.stringify(resolve(home, "docker.log"))}, JSON.stringify(process.argv.slice(2)) + "\\n");
 if (!process.env.ALLOW_DOCKER) process.exit(99);
+// A daemon that is slow to answer, until the file DOCKER_HOLD names exists.
+// Not for ever: a test that fails first never makes it.
+if (process.argv[2] === "info" && process.env.DOCKER_HOLD)
+  for (let waits = 0; waits < 500 && !fs.existsSync(process.env.DOCKER_HOLD); waits += 1)
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+if (process.env.DOCKER_CWD) fs.appendFileSync(process.env.DOCKER_CWD, process.cwd() + "\\n");
 if (process.argv[2] === "info") console.log("26.0.0");
 if (process.argv.includes("version")) console.log("2.24.4");
 // The services \`compose ps\` lists, for the tests that have any.
@@ -61,6 +67,8 @@ if (process.argv[2] === "status") {
 } else {
   fs.appendFileSync(${JSON.stringify(resolve(home, "tailscale.log"))}, JSON.stringify({ pid: process.pid, args: process.argv.slice(2) }) + "\\n");
   console.log("https://test.ts.net");
+  // One that takes a moment to remove its entry once asked to stop.
+  if (process.env.TAILSCALE_LINGERS) process.on("SIGTERM", () => setTimeout(() => process.exit(0), 1500));
   setInterval(() => {}, 1000);
 }
 `,
@@ -322,6 +330,24 @@ test.each(["down", "reset"])("%s stops a running start first", async (name) => {
     expect(state().launcher).toBeUndefined();
     expect(state().tailnet).toBeUndefined();
   }
+});
+
+test("what a start that was killed outright recorded is not taken for the stack's", async () => {
+  config();
+  await command("up");
+  const { apps } = state();
+  // As a `start --tailscale` leaves the state when it cannot remove its
+  // launcher and tailnet name: the PID is of a process that has ended.
+  const { pid } = spawnSync(process.execPath, ["-e", ""]);
+  const launcher = { pid, started: "Thu Jan  1 00:00:00 1970" };
+  writeFileSync(statePath(), JSON.stringify({ ...state(), tailnet: "test.ts.net", launcher }));
+
+  const local = `http://localhost:${apps.web!.ports.http}`;
+  const status = (await command("status")).stdout;
+  expect(status).toContain("No `devenv start` is running");
+  expect(status).toContain(`web: ${local}`);
+  const run = await command("run", "--", process.execPath, "-p", "process.env.WEB_URL");
+  expect(run.stdout.trim()).toBe(local);
 });
 
 test("start runs only the apps: the services and setup are up's", async () => {
@@ -742,6 +768,60 @@ test("up moves a served service port under a start without --tailscale, which ke
   await command("up");
   expect(dev.child.exitCode).toBeNull();
   expect(state().launcher?.pid).toBe(dev.child.pid);
+});
+
+test("up keeps the app ports a start recorded while up was waiting for Docker", async () => {
+  config('compose: { files: ["compose.yml"] },');
+  env.ALLOW_DOCKER = "1";
+  await command("up");
+  const before = state();
+  rmSync(resolve(home, "docker.log"));
+  env.DOCKER_HOLD = resolve(home, "docker.answers");
+  const up = start("up");
+  await expect.poll(() => existsSync(resolve(home, "docker.log"))).toBe(true);
+  // As a `start` does that finds the port it had taken.
+  const moved = { ...before.apps, web: { ports: { http: before.apps.web!.ports.http! + 1 } } };
+  writeFileSync(statePath(), JSON.stringify({ ...before, apps: moved }));
+  const closed = once(up.child, "close");
+  writeFileSync(env.DOCKER_HOLD, "");
+  expect((await closed)[0], up.output()).toBe(0);
+  expect(state().apps).toEqual(moved);
+});
+
+test("Docker is asked from the project root, wherever in the project the command runs", async () => {
+  config('compose: { files: ["compose.yml"] },');
+  env.ALLOW_DOCKER = "1";
+  env.DOCKER_CWD = resolve(home, "docker.cwd");
+  mkdirSync(resolve(root, "apps/web"), { recursive: true });
+  await execute(process.execPath, ["--input-type=module", "-e", cli, "--", "up"], {
+    cwd: resolve(root, "apps/web"),
+    env,
+  });
+  // What the root `.env` names by a relative path, a Docker config say, must
+  // be the same for the checks as for Compose.
+  const asked = new Set(readFileSync(env.DOCKER_CWD, "utf8").trim().split("\n"));
+  expect([...asked]).toEqual([root]);
+});
+
+test("tailnet serve asked to stop twice still waits for its entries to go", async () => {
+  env.TAILSCALE_LINGERS = "1";
+  const serving = start("tailnet", "serve", "4000");
+  await expect.poll(serving.output).toContain("https://test.ts.net:4000");
+  const closed = once(serving.child, "close");
+  serving.child.kill("SIGINT");
+  // Apart, or the two would reach it as one.
+  await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  serving.child.kill("SIGINT");
+  expect(await closed).toEqual([0, null]);
+  for (const { pid } of tailscaleLog()) expect(() => process.kill(pid, 0)).toThrow();
+});
+
+test("tailnet info takes only --json", async () => {
+  expect(JSON.parse((await command("tailnet", "info", "--json")).stdout)).toEqual({
+    host: "test.ts.net",
+    problems: [],
+  });
+  await expect(command("tailnet", "info", "--jsn")).rejects.toThrow("takes only `--json`");
 });
 
 test("a service or port that compose.serve names and the stack lacks fails up", async () => {
